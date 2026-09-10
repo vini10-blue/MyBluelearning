@@ -1,5 +1,5 @@
 /**
- * In-memory sliding-window rate limiter for /api/extract.
+ * In-memory sliding-window rate limiter for the /api endpoints.
  *
  * State lives in module scope, so it persists across invocations on a warm
  * Vercel instance and resets on cold start. That is acceptable here: the app

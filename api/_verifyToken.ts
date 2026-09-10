@@ -3,7 +3,7 @@ import type { JWTPayload } from 'jose';
 
 /**
  * Verifies the Microsoft Entra (Azure AD) ID token the PWA presents on every
- * /api/extract call. This is what keeps the endpoint from being an open,
+ * /api/ingest call. This is what keeps the endpoint from being an open,
  * anonymous proxy to the Anthropic API: only a signed-in Blue Lagoon account
  * (our tenant, our app registration) can drive it.
  *
@@ -62,7 +62,7 @@ export async function verifyRequestToken(
   if (!tenantId || !clientId) {
     // eslint-disable-next-line no-console
     console.error(
-      '[/api/extract] auth config missing —',
+      '[api/auth] auth config missing —',
       `tenantId=${tenantId ? 'set' : 'MISSING'}`,
       `clientId=${clientId ? 'set' : 'MISSING'}`,
     );
@@ -113,7 +113,7 @@ export async function verifyRequestToken(
     }
   } else {
     // eslint-disable-next-line no-console
-    console.warn('[/api/extract] ALLOWED_USER_OIDS unset — accepting any tenant user');
+    console.warn('[api/auth] ALLOWED_USER_OIDS unset — accepting any tenant user');
   }
 
   return { oid };
