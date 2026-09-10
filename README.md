@@ -41,7 +41,29 @@ Anything that cannot is **dropped at ingest**, not flagged for later. A
 citation with a missing flag is treated as malformed rather than as
 unverified, because defaulting it would silently launder unchecked content.
 
-`npm run check:pack` exercises all of this.
+### Verification is mechanical, not self-reported
+
+At ingest the model is asked to copy a **verbatim quote** from the chunk it
+cites. The server then checks that the quote is actually there and sets
+`verified` itself — the schema never gives the model a field to assert it with,
+and on a verified quote the chunk's own locator and URL overwrite whatever the
+model supplied (it is a reliable copier of text and an unreliable source of
+metadata).
+
+The check is a strict substring match after normalising the things that are
+copying artifacts rather than meaning: curly quotes, non-breaking spaces, soft
+hyphens, ragged whitespace, case. A paraphrase is not a quote. There is also a
+minimum quote length, because without one a model could "verify" anything by
+quoting a single common word.
+
+Anthropic's native citations feature cannot be used here — it returns a 400 when
+combined with structured outputs — so this is not merely the better option, it
+is the only one.
+
+`npm run check` runs the typecheck plus both harnesses: `check:pack` for the
+guard, `check:quotes` for verification (including the cases that would defeat
+it — paraphrase, trivially short quotes, real text attributed to the wrong
+document).
 
 Unverified citations render with amber chrome and an explicit label, because a
 citation carrying a real SAP URL and an invented quote is more dangerous than
@@ -59,9 +81,22 @@ Built:
   (`src/lib/validateCoursePack.ts`), with a passing verification harness.
 - **Map** mode for the EWM inbound slice.
 
-Not built: Walkthrough, the four drills, Explain, the FSRS review queue, and
-the ingest pipeline. Their routes exist and say plainly that they are not
-implemented rather than showing plausible-looking placeholder content.
+- **Ingest, pass 1** — `api/ingest.ts` builds a process model from a SAP Help
+  Portal page, with every citation settled mechanically against the source
+  text. Source fetching is allowlisted to `help.sap.com` (the origin comes from
+  the client, so without that this endpoint would fetch arbitrary URLs using
+  the server's network position).
+
+Not built: Walkthrough, the four drills, Explain, the FSRS review queue, ingest
+pass 2 (item generation), and PDF ingest. The unbuilt routes exist and say
+plainly that they are not implemented rather than showing plausible-looking
+placeholder content.
+
+**Untestable locally:** `help.sap.com` is blocked by the development
+environment's egress proxy, so the fetch path in `api/_sources.ts` has never
+run against the real host. Everything downstream of the fetch — chunking, quote
+verification, the guard — is covered by the harnesses. First job on a preview
+deploy is to run ingest against a real Help Portal page.
 
 ### The seed pack is a fixture, not study material
 
@@ -89,14 +124,18 @@ OneDrive scope.
 
 - `npm run dev` — local Vite
 - `npm run typecheck` — `tsc -b --noEmit`, covers `src`, `api`, `scripts` and the vite config
-- `npm run check:pack` — the accuracy-guard verification harness
+- `npm run check` — typecheck plus both verification harnesses
+- `npm run check:pack` — the accuracy-guard harness
+- `npm run check:quotes` — the citation-verification harness
 - `npm run build` — `tsc -b && vite build`
 - `node scripts/generate-icons.mjs` — regenerate PWA icons from `scripts/icon.svg`
 
 ## Storage
 
 Course packs and progress are JSON on OneDrive via Microsoft Graph, so phone
-and laptop sync without running a database. Graph responses are deliberately
+and laptop sync without running a database. The serverless functions never hold
+Graph credentials — ingest returns the pack and the browser uploads it with its
+own token. Graph responses are deliberately
 *not* runtime-cached in the service worker — they carry a short-lived bearer
 token, so caching them would either leak authenticated content or serve
 expired responses.

@@ -12,10 +12,12 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
-    "check:pack": "mkdir -p node_modules/.cache && esbuild scripts/check-pack.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-pack.mjs --log-level=warning && node node_modules/.cache/check-pack.mjs"
+    "check:pack": "mkdir -p node_modules/.cache && esbuild scripts/check-pack.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-pack.mjs --log-level=warning && node node_modules/.cache/check-pack.mjs",
+    "check:quotes": "mkdir -p node_modules/.cache && esbuild scripts/check-quotes.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-quotes.mjs --log-level=warning && node node_modules/.cache/check-quotes.mjs",
+    "check": "npm run typecheck && npm run check:pack && npm run check:quotes"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.65.0",
+    "@anthropic-ai/sdk": "^0.125.0",
     "@azure/msal-browser": "4.30.0",
     "@azure/msal-react": "3.0.29",
     "jose": "6.2.3",
@@ -33,6 +35,7 @@
     "@vercel/node": "^5.8.3",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.20",
+    "esbuild": "^0.25.0",
     "postcss": "^8.5.0",
     "sharp": "^0.34.5",
     "tailwindcss": "^4.0.0",
@@ -40,7 +43,6 @@
     "vite": "^7.0.0",
     "vite-plugin-pwa": "^1.0.0",
     "workbox-precaching": "^7.4.1",
-    "workbox-routing": "^7.4.1",
-    "esbuild": "^0.25.0"
+    "workbox-routing": "^7.4.1"
   }
 }
