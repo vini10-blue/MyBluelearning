@@ -1,19 +1,27 @@
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getPack } from '../lib/packs';
-import type { NodeKind, ProcessEdge, ProcessNode } from '../lib/types';
+import type {
+  NodeKind,
+  ProcessEdge,
+  ProcessNode,
+  SourcedClaim,
+  SourcedToken,
+  Synthesis,
+} from '../lib/types';
 import { CitationList } from './CitationList';
 
 /**
  * Map mode — 4C/ID's supportive information.
  *
  * Rendered as a vertical flow rather than a free-form node graph. A
- * force-directed diagram looks more impressive on a laptop and is unusable on
- * a phone; a vertical spine with labelled connectors is still a real process
- * diagram, stays readable at 400px, and matches how the process is actually
- * narrated in the Walkthrough.
+ * force-directed diagram looks better on a laptop and is unusable on a phone; a
+ * vertical spine with labelled connectors is still a real process diagram,
+ * stays readable at 400px, and matches how the Walkthrough narrates it.
  *
- * Tapping a step opens its detail at its own URL, so a citation elsewhere in
- * the app can deep-link straight to the step it concerns.
+ * The screen's job beyond layout is to keep two kinds of content visually
+ * distinct: what the documentation states, and what Claude reasoned from it.
+ * If those look alike here, the whole sourced/synthesis split in the model is
+ * decoration.
  */
 export function MapScreen() {
   const { packId, nodeId } = useParams();
@@ -37,8 +45,10 @@ export function MapScreen() {
     .map((id) => byId.get(id))
     .filter((n): n is ProcessNode => Boolean(n));
 
-  // Nodes reachable from the process but not on the happy path — branches and
-  // decisions hang off the spine rather than interrupting it.
+  // Nodes not on the spine — decisions and branches hang off it rather than
+  // interrupting it. Bin determination is the canonical case: it happens WITHIN
+  // warehouse-task creation, so listing it as a sequential step would teach a
+  // false ordering.
   const offPath = process.nodes.filter((n) => !process.happyPath.includes(n.id));
 
   const selected = nodeId ? byId.get(nodeId) ?? null : null;
@@ -89,15 +99,18 @@ export function MapScreen() {
                       <path d="m9 18 6-6-6-6" />
                     </svg>
                   </div>
-                  <p className="mt-2 text-sm text-slate-600">{node.what}</p>
+                  <p className="mt-2 text-sm text-slate-600">{node.what.text}</p>
                 </button>
 
-                {!isLast && (
+                {/* A connector is drawn only when an edge actually asserts the
+                    ordering. The validator makes a missing edge fatal, so this
+                    should never render empty — but inventing a "then" label for
+                    an ordering nothing claims is how a false sequence got into
+                    this app once already. */}
+                {!isLast && edge && (
                   <div className="flex items-stretch gap-3 py-1 pl-3.5">
                     <div className="w-px bg-slate-300" aria-hidden="true" />
-                    <p className="py-2 text-xs italic text-slate-500">
-                      {edge?.label ?? 'then'}
-                    </p>
+                    <p className="py-2 text-xs italic text-slate-500">{edge.label.text}</p>
                   </div>
                 )}
               </li>
@@ -108,8 +121,11 @@ export function MapScreen() {
         {offPath.length > 0 && (
           <section className="mt-8">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Branches off the main path
+              Decisions made within these steps
             </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Not later steps — these happen inside the steps above.
+            </p>
             <div className="mt-3 space-y-2">
               {offPath.map((node) => (
                 <button
@@ -118,8 +134,16 @@ export function MapScreen() {
                   onClick={() => navigate(`/pack/${pack.id}/map/${node.id}`)}
                   className="w-full rounded-xl bg-slate-50 p-3 text-left ring-1 ring-slate-200 active:scale-[0.99] transition"
                 >
-                  <span className="text-sm font-medium text-slate-800">{node.label}</span>
+                  <span className="block text-sm font-medium text-slate-800">{node.label}</span>
                   <KindBadge kind={node.kind} />
+                  {process.edges
+                    .filter((e) => e.to === node.id)
+                    .slice(0, 1)
+                    .map((e) => (
+                      <span key={e.id} className="mt-1 block text-xs italic text-slate-500">
+                        during {byId.get(e.from)?.label ?? e.from}
+                      </span>
+                    ))}
                 </button>
               ))}
             </div>
@@ -134,16 +158,16 @@ export function MapScreen() {
             <div className="mt-3 space-y-3">
               {process.failureModes.map((fm) => (
                 <div key={fm.id} className="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-                  <p className="text-sm font-medium text-slate-900">{fm.symptom}</p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    <span className="font-medium text-slate-700">Cause: </span>
-                    {fm.cause}
-                  </p>
-                  <p className="mt-1 text-sm text-slate-600">
+                  <p className="text-sm font-medium text-slate-900">{fm.symptom.text}</p>
+                  <CitationList citations={fm.symptom.citations} />
+                  <div className="mt-3">
+                    <SynthesisBlock label="Likely cause" synthesis={fm.cause} />
+                  </div>
+                  <p className="mt-3 text-sm text-slate-600">
                     <span className="font-medium text-slate-700">Fix: </span>
-                    {fm.resolution}
+                    {fm.resolution.text}
                   </p>
-                  <CitationList citations={fm.citations} />
+                  <CitationList citations={fm.resolution.citations} />
                 </div>
               ))}
             </div>
@@ -174,11 +198,63 @@ function KindBadge({ kind }: { kind: NodeKind }) {
   );
 }
 
+/** A claim the documentation states, with its evidence. */
+function SourcedBlock({ label, claim }: { label: string; claim: SourcedClaim }) {
+  return (
+    <div>
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</h3>
+      <p className="mt-1 rounded-lg bg-slate-50 p-3 text-sm text-slate-700 ring-1 ring-slate-200">
+        {claim.text}
+      </p>
+      <CitationList citations={claim.citations} role="source" />
+    </div>
+  );
+}
+
 /**
- * Step detail. The order of the sections is deliberate: what it is, then why
- * it exists, then what breaks without it. The last two are the reason this app
- * exists — a learner who can recite the sequence but cannot answer them has
- * memorised rather than understood.
+ * Claude's reasoning, marked as such.
+ *
+ * The dashed border and the explicit attribution line are load-bearing, not
+ * decoration. Documentation states what a system does and rarely why, so this
+ * content is nearly always inference — and an inference that looks sourced is
+ * more dangerous than one that looks unsourced, because it stops the reader
+ * checking. The supporting passages are offered as something to judge the
+ * reasoning against, never as proof of it.
+ */
+function SynthesisBlock({ label, synthesis }: { label: string; synthesis: Synthesis }) {
+  return (
+    <div>
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</h3>
+      <div className="mt-1 rounded-lg border border-dashed border-violet-300 bg-violet-50/60 p-3">
+        <p className="text-sm text-violet-950">{synthesis.text}</p>
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-violet-700">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+            <path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9" />
+          </svg>
+          {synthesis.origin === 'stated'
+            ? "Stated by the documentation"
+            : "Claude's reading — not stated in the source"}
+        </p>
+      </div>
+      <CitationList citations={synthesis.basedOn} role="support" />
+    </div>
+  );
+}
+
+/** A literal token, shown only because it was located in the source. */
+function TokenChip({ token }: { token: SourcedToken }) {
+  return (
+    <span className="rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-700">
+      {token.value}
+    </span>
+  );
+}
+
+/**
+ * Step detail. Section order is deliberate: what it is, then why it exists,
+ * then what breaks without it. The last two are the reason this app exists — a
+ * learner who can recite the sequence but cannot answer them has memorised
+ * rather than understood.
  */
 function NodeDetail({ node, onClose }: { node: ProcessNode; onClose: () => void }) {
   return (
@@ -201,9 +277,11 @@ function NodeDetail({ node, onClose }: { node: ProcessNode; onClose: () => void 
           </button>
         </div>
 
-        <Section title="What it is" body={node.what} />
-        <Section title="Why it exists" body={node.why} accent="blue" />
-        <Section title="What breaks without it" body={node.breaksIf} accent="rose" />
+        <div className="mt-4 space-y-4">
+          <SourcedBlock label="What it is" claim={node.what} />
+          <SynthesisBlock label="Why it exists" synthesis={node.why} />
+          <SynthesisBlock label="What breaks without it" synthesis={node.breaksIf} />
+        </div>
 
         {node.configPath && (
           <div className="mt-4">
@@ -211,46 +289,27 @@ function NodeDetail({ node, onClose }: { node: ProcessNode; onClose: () => void 
               Where to configure it
             </h3>
             <p className="mt-1 rounded-lg bg-slate-50 p-3 font-mono text-xs text-slate-700 ring-1 ring-slate-200">
-              {node.configPath}
+              {node.configPath.value}
             </p>
+            {node.configPath.citation && (
+              <CitationList citations={[node.configPath.citation]} role="source" />
+            )}
           </div>
         )}
 
-        {node.tcodes && node.tcodes.length > 0 && (
-          <div className="mt-4 flex flex-wrap gap-1.5">
-            {node.tcodes.map((t) => (
-              <span key={t} className="rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-700">
-                {t}
-              </span>
-            ))}
+        {node.tcodes.length > 0 && (
+          <div className="mt-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Transaction codes
+            </h3>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {node.tcodes.map((t) => (
+                <TokenChip key={t.value} token={t} />
+              ))}
+            </div>
           </div>
         )}
-
-        <CitationList citations={node.citations} />
       </div>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  body,
-  accent,
-}: {
-  title: string;
-  body: string;
-  accent?: 'blue' | 'rose';
-}) {
-  const tone =
-    accent === 'blue'
-      ? 'bg-blue-50 ring-blue-100 text-blue-950'
-      : accent === 'rose'
-        ? 'bg-rose-50 ring-rose-100 text-rose-950'
-        : 'bg-slate-50 ring-slate-200 text-slate-700';
-  return (
-    <div className="mt-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</h3>
-      <p className={`mt-1 rounded-lg p-3 text-sm ring-1 ${tone}`}>{body}</p>
     </div>
   );
 }

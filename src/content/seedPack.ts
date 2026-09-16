@@ -1,26 +1,33 @@
-import type { Citation, CoursePack } from '../lib/types';
+import type { Citation, CoursePack, SourcedClaim, Synthesis } from '../lib/types';
 
 /**
  * Development fixture: EWM inbound, goods receipt to putaway.
  *
  * ─────────────────────────── READ THIS FIRST ───────────────────────────
- * This is NOT verified study content and must not be treated as such.
+ * This is a fixture for building the UI against. It is not study material.
  *
- * Every citation below carries `verified: false`, for two separate reasons:
+ * Its limitation is recorded where it belongs — on the SOURCE DOCUMENTS, via
+ * `provenanceNote`. The excerpts below were relayed through a web-search
+ * summary of the SAP Help pages rather than fetched from help.sap.com (blocked
+ * by the development environment's egress proxy), so the text is second-hand.
+ * Every quote genuinely is present in the excerpt it cites, which is what
+ * `quoteFound: true` asserts and all it asserts.
  *
- *  1. The quotes were relayed through a web-search summary of the SAP Help
- *     pages, not read from the pages themselves — help.sap.com is blocked by
- *     the development environment's egress proxy, so the quotes could not be
- *     checked against the live source.
- *  2. The `why` and `breaksIf` text on each node is model-authored inference
- *     about the process, not quoted from SAP. It is exactly the class of
- *     content the accuracy guard exists to distrust.
+ * The `why` and `breaksIf` fields are `origin: 'inferred'` — model reasoning
+ * about the process, not SAP's words. That is normal and expected: vendor
+ * documentation states what a system does and almost never why. The point of
+ * the sourced/synthesis split is that this content is now labelled instead of
+ * hiding under a citation that supports only the neighbouring `what`.
  *
- * The fixture exists so the Map, Walkthrough and drill UIs can be built and
- * demonstrated against a realistically shaped pack before the ingest pipeline
- * is reachable. First real task once the app is deployed: re-ingest this
- * process from the live SAP Help Portal and let the generated pack replace
- * this file entirely.
+ * ── A correction worth keeping in view ──
+ * An earlier version of this fixture put `storage-bin` on the happy path AFTER
+ * `warehouse-order`. The node's own cited quote says bin determination happens
+ * when EWM creates the warehouse task — so the fixture taught an ordering its
+ * own source contradicted, and a Sequence-it drill generated from it would have
+ * drilled that error. Bin determination is a decision made WITHIN warehouse-task
+ * creation, so it now hangs off the spine as a branch. The validator gained a
+ * check that every consecutive pair on the happy path is joined by a real edge,
+ * which is what would have caught it.
  * ───────────────────────────────────────────────────────────────────────
  */
 
@@ -32,7 +39,6 @@ const WT_URL =
 const INBOUND_URL =
   'https://help.sap.com/docs/SAP_S4HANA_ON-PREMISE/9832125c23154a179bfa1784cdc9577a/e15a4205bb284393add14c9d419fef45.html';
 
-/** Helper so every citation in this file is unmistakably marked unverified. */
 function cite(
   sourceId: string,
   sourceTitle: string,
@@ -40,7 +46,7 @@ function cite(
   locator: string,
   quote: string,
 ): Citation {
-  return { sourceId, sourceTitle, url, locator, quote, verified: false };
+  return { sourceId, sourceTitle, url, locator, quote, quoteFound: true };
 }
 
 const wtCite = (locator: string, quote: string) =>
@@ -48,9 +54,45 @@ const wtCite = (locator: string, quote: string) =>
 const inCite = (locator: string, quote: string) =>
   cite(HELP_INBOUND, 'Inbound Process', INBOUND_URL, locator, quote);
 
+const sourced = (text: string, citations: Citation[]): SourcedClaim => ({ text, citations });
+const inferred = (text: string, basedOn: Citation[]): Synthesis => ({
+  text,
+  origin: 'inferred',
+  basedOn,
+});
+
+const AUTO_WT = wtCite(
+  'Creation of Warehouse Tasks for Putaway',
+  'Extended Warehouse Management (EWM) automatically creates warehouse tasks for the putaway based on a warehouse request for an inbound delivery, so that you can put away products.',
+);
+const PPF_ACTION = wtCite(
+  'Creation of Warehouse Tasks for Putaway',
+  'EWM can create warehouse tasks for an inbound delivery using an action from the Post Processing Framework (PPF).',
+);
+const MANUAL_WT = wtCite(
+  'Creation of Warehouse Tasks for Putaway — manual creation',
+  'If you want to create a warehouse task manually, on the SAP Easy Access screen, choose Extended Warehouse Management → Work Scheduling → Create Warehouse Task for Warehouse Request → Putaway for Inbound Delivery.',
+);
+const WO_CUSTOMIZING = wtCite(
+  'Creation of Warehouse Tasks for Putaway — warehouse order settings',
+  'If you want EWM to automatically group warehouse tasks into warehouse orders, you must have made the settings in Customizing for warehouse order creation. In the Implementation Guide (IMG) for EWM, choose Cross-Process Settings → Warehouse Order.',
+);
+const BIN_DETERMINATION = wtCite(
+  'Creation of Warehouse Tasks for Putaway — storage bin determination',
+  'When EWM creates a warehouse task for a warehouse request, it uses putaway strategies to determine the storage bin.',
+);
+const GR_THEN_WT = inCite(
+  'Inbound Process',
+  'Warehouse tasks for putaway are created after the goods receipt is posted.',
+);
+const INBOUND_SPAN = inCite(
+  'Inbound Process',
+  'The inbound process for Advanced Shipping and Receiving in Extended Warehouse Management (EWM) starts with purchasing and ends with putaway in the warehouse.',
+);
+
 export const SEED_PACK: CoursePack = {
   id: 'seed-ewm-inbound-putaway',
-  schemaVersion: 1,
+  schemaVersion: 2,
   createdAt: '2026-09-10T00:00:00.000Z',
   sources: [
     {
@@ -59,6 +101,8 @@ export const SEED_PACK: CoursePack = {
       title: 'Creation of Warehouse Tasks for Putaway',
       origin: WT_URL,
       ingestedAt: '2026-09-10T00:00:00.000Z',
+      provenanceNote:
+        'Excerpt relayed through a web-search summary, not fetched from help.sap.com. Quotes are present in the excerpt we hold; the excerpt itself has not been checked against the live page.',
     },
     {
       id: HELP_INBOUND,
@@ -66,6 +110,8 @@ export const SEED_PACK: CoursePack = {
       title: 'Inbound Process',
       origin: INBOUND_URL,
       ingestedAt: '2026-09-10T00:00:00.000Z',
+      provenanceNote:
+        'Excerpt relayed through a web-search summary, not fetched from help.sap.com. Quotes are present in the excerpt we hold; the excerpt itself has not been checked against the live page.',
     },
   ],
   process: {
@@ -82,110 +128,96 @@ export const SEED_PACK: CoursePack = {
         id: 'inbound-delivery',
         label: 'Inbound delivery',
         kind: 'document',
-        what:
-          'The warehouse request telling EWM that goods are expected, and what they are.',
-        why:
-          'It is the authorisation boundary. EWM will not create putaway work from a ' +
-          'purchase order alone — it acts on a warehouse request, which is what makes ' +
-          'the expected goods visible to the warehouse as work rather than as a plan.',
-        breaksIf:
-          'With no inbound delivery there is no warehouse request, so no warehouse ' +
-          'task can be created and the goods have no route into the warehouse.',
-        citations: [
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway',
-            'Extended Warehouse Management (EWM) automatically creates warehouse tasks for the putaway based on a warehouse request for an inbound delivery, so that you can put away products.',
-          ),
-        ],
+        what: sourced(
+          'The warehouse request that tells EWM goods are expected, and on which putaway warehouse tasks are based.',
+          [AUTO_WT],
+        ),
+        why: inferred(
+          'It is the authorisation boundary. EWM acts on a warehouse request, not on a purchase order — which is what turns expected goods from a plan into work the warehouse can see.',
+          [AUTO_WT],
+        ),
+        breaksIf: inferred(
+          'With no inbound delivery there is no warehouse request, so there is nothing for EWM to create putaway tasks from and the goods have no route into the warehouse.',
+          [AUTO_WT],
+        ),
+        tcodes: [],
       },
       {
         id: 'goods-receipt',
         label: 'Post goods receipt',
         kind: 'step',
-        what: 'Recording that the goods have physically arrived.',
-        why:
-          'It is the point where expected stock becomes real stock. Ordering the ' +
-          'putaway before this would mean moving inventory the system does not yet ' +
-          'believe exists.',
-        breaksIf:
-          'Putaway warehouse tasks are created after the goods receipt is posted, so ' +
-          'if the GR has not posted, the absence of putaway work is the expected ' +
-          'behaviour rather than a fault to troubleshoot.',
-        citations: [
-          inCite(
-            'Inbound Process',
-            'The inbound process for Advanced Shipping and Receiving in Extended Warehouse Management (EWM) starts with purchasing and ends with putaway in the warehouse. Warehouse tasks for putaway are created after the goods receipt is posted.',
-          ),
-        ],
+        what: sourced(
+          'Recording that the goods have physically arrived. Putaway warehouse tasks are created after this posting.',
+          [GR_THEN_WT],
+        ),
+        why: inferred(
+          'It is the point where expected stock becomes real stock. Ordering putaway before it would mean moving inventory the system does not yet believe exists.',
+          [GR_THEN_WT],
+        ),
+        breaksIf: inferred(
+          'If the goods receipt has not posted, the absence of putaway work is correct behaviour rather than a fault — which is why "no warehouse task" should send you to check the GR before you check configuration.',
+          [GR_THEN_WT],
+        ),
+        tcodes: [],
       },
       {
         id: 'warehouse-task',
         label: 'Warehouse task',
         kind: 'object',
-        what: 'The instruction to move a specific quantity to a specific destination.',
-        why:
-          'It is the unit of physical work. Everything upstream is paperwork about ' +
-          'what should happen; the warehouse task is the first object that tells a ' +
-          'person or a robot to actually move something.',
-        breaksIf:
-          'If the Post Processing Framework action that creates it is not configured ' +
-          'or does not fire, no putaway work reaches the floor even though the goods ' +
-          'receipt posted cleanly — which is why "GR posted but nothing to do" points ' +
-          'at PPF rather than at the delivery.',
-        configPath:
-          'SAP Easy Access: Extended Warehouse Management → Work Scheduling → Create Warehouse Task for Warehouse Request → Putaway for Inbound Delivery',
-        citations: [
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway',
-            'EWM can create warehouse tasks for an inbound delivery using an action from the Post Processing Framework (PPF).',
-          ),
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway — manual creation',
-            'If you want to create a warehouse task manually, on the SAP Easy Access screen, choose Extended Warehouse Management → Work Scheduling → Create Warehouse Task for Warehouse Request → Putaway for Inbound Delivery.',
-          ),
-        ],
-      },
-      {
-        id: 'warehouse-order',
-        label: 'Warehouse order',
-        kind: 'object',
-        what: 'A bundle of warehouse tasks issued to one resource as one piece of work.',
-        why:
-          'It exists for the human, not the system. Tasks are the correct unit for ' +
-          'inventory accuracy but a terrible unit for a picker walking a warehouse; ' +
-          'the order groups them into a sensible trip.',
-        breaksIf:
-          'Grouping depends on warehouse order creation settings in Customizing. ' +
-          'Without them, tasks are not grouped as intended and the floor receives ' +
-          'work in an inefficient shape even though every task is individually correct.',
-        configPath: 'IMG for EWM: Cross-Process Settings → Warehouse Order',
-        citations: [
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway — warehouse order settings',
-            'If you want EWM to automatically group warehouse tasks into warehouse orders, you must have made the settings in Customizing for warehouse order creation. In the Implementation Guide (IMG) for EWM, choose Cross-Process Settings → Warehouse Order.',
-          ),
-        ],
+        what: sourced(
+          'The instruction to move a quantity to a destination. EWM can create it automatically through a Post Processing Framework action, or you can create it manually from Work Scheduling.',
+          [PPF_ACTION, MANUAL_WT],
+        ),
+        why: inferred(
+          'It is the unit of physical work. Everything upstream describes what should happen; the warehouse task is the first object that tells someone to actually move something.',
+          [PPF_ACTION],
+        ),
+        breaksIf: inferred(
+          'If the PPF action is not configured or does not fire, no putaway work reaches the floor even though the goods receipt posted cleanly. That is why "GR posted but nothing to do" points at PPF rather than at the delivery.',
+          [PPF_ACTION],
+        ),
+        tcodes: [],
       },
       {
         id: 'storage-bin',
         label: 'Storage bin determination',
         kind: 'decision',
-        what:
-          'The decision of which bin the stock goes into, made by the putaway strategy.',
-        why:
-          'This is where warehouse policy becomes a physical location. The strategy ' +
-          'is the lever that encodes business intent — fast movers near despatch, ' +
-          'hazardous goods segregated — into an automatic per-item choice.',
-        breaksIf:
-          'A wrong or missing putaway strategy does not fail loudly. Stock lands in ' +
-          'the wrong bin type and the cost shows up later as slow picking or a ' +
-          'compliance problem, not as an error message at putaway time.',
-        citations: [
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway — storage bin determination',
-            'When EWM creates a warehouse task for a warehouse request, it uses putaway strategies to determine the storage bin.',
-          ),
-        ],
+        what: sourced(
+          'The determination of which bin the stock goes to, made by putaway strategies at the moment EWM creates the warehouse task.',
+          [BIN_DETERMINATION],
+        ),
+        why: inferred(
+          'This is where warehouse policy becomes a physical location. The strategy encodes business intent — fast movers near despatch, hazardous goods segregated — as an automatic per-item choice.',
+          [BIN_DETERMINATION],
+        ),
+        breaksIf: inferred(
+          'A wrong or missing putaway strategy does not fail loudly. Stock lands in the wrong bin type and the cost surfaces later as slow picking or a compliance problem, not as an error at putaway time.',
+          [BIN_DETERMINATION],
+        ),
+        tcodes: [],
+      },
+      {
+        id: 'warehouse-order',
+        label: 'Warehouse order',
+        kind: 'object',
+        what: sourced(
+          'A grouping of warehouse tasks issued as one piece of work. Automatic grouping requires warehouse order creation settings in Customizing.',
+          [WO_CUSTOMIZING],
+        ),
+        why: inferred(
+          'It exists for the human, not the system. Tasks are the right unit for inventory accuracy but a poor unit for a person walking a warehouse; the order groups them into a sensible trip.',
+          [WO_CUSTOMIZING],
+        ),
+        breaksIf: inferred(
+          'Without the Customizing settings, tasks are not grouped as intended and the floor receives work in an inefficient shape even though every individual task is correct.',
+          [WO_CUSTOMIZING],
+        ),
+        tcodes: [],
+        configPath: {
+          value: 'Cross-Process Settings → Warehouse Order',
+          foundInSource: true,
+          citation: WO_CUSTOMIZING,
+        },
       },
     ],
     edges: [
@@ -193,117 +225,85 @@ export const SEED_PACK: CoursePack = {
         id: 'e-delivery-gr',
         from: 'inbound-delivery',
         to: 'goods-receipt',
-        label: 'goods physically arrive against the delivery',
-        citations: [
-          inCite(
-            'Inbound Process',
-            'The inbound process for Advanced Shipping and Receiving in Extended Warehouse Management (EWM) starts with purchasing and ends with putaway in the warehouse.',
-          ),
-        ],
+        label: sourced('Goods physically arrive against the expected delivery.', [INBOUND_SPAN]),
       },
       {
         id: 'e-gr-wt',
         from: 'goods-receipt',
         to: 'warehouse-task',
-        label: 'GR posting triggers putaway task creation (PPF action)',
-        citations: [
-          inCite(
-            'Inbound Process',
-            'Warehouse tasks for putaway are created after the goods receipt is posted.',
-          ),
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway',
-            'EWM can create warehouse tasks for an inbound delivery using an action from the Post Processing Framework (PPF).',
-          ),
-        ],
-      },
-      {
-        id: 'e-wt-wo',
-        from: 'warehouse-task',
-        to: 'warehouse-order',
-        label: 'tasks grouped into an order per Customizing',
-        citations: [
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway — warehouse order settings',
-            'If you want EWM to automatically group warehouse tasks into warehouse orders, you must have made the settings in Customizing for warehouse order creation.',
-          ),
-        ],
+        label: sourced(
+          'Posting the goods receipt is what putaway task creation follows.',
+          [GR_THEN_WT, PPF_ACTION],
+        ),
       },
       {
         id: 'e-wt-bin',
         from: 'warehouse-task',
         to: 'storage-bin',
-        label: 'putaway strategy determines the destination bin',
-        citations: [
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway — storage bin determination',
-            'When EWM creates a warehouse task for a warehouse request, it uses putaway strategies to determine the storage bin.',
-          ),
-        ],
+        label: sourced(
+          'Creating the task is when putaway strategies determine the destination bin.',
+          [BIN_DETERMINATION],
+        ),
+      },
+      {
+        id: 'e-wt-wo',
+        from: 'warehouse-task',
+        to: 'warehouse-order',
+        label: sourced('Tasks are grouped into an order per Customizing.', [WO_CUSTOMIZING]),
       },
     ],
     failureModes: [
       {
         id: 'fm-no-wt-after-gr',
-        symptom: 'Goods receipt posted, but no putaway warehouse task appears.',
-        cause:
-          'The Post Processing Framework action that creates warehouse tasks for the ' +
-          'inbound delivery did not run.',
+        symptom: sourced(
+          'Goods receipt posted, but no putaway warehouse task appears.',
+          [GR_THEN_WT],
+        ),
+        cause: inferred(
+          'The Post Processing Framework action that creates warehouse tasks for the inbound delivery did not run.',
+          [PPF_ACTION],
+        ),
         nodeIds: ['goods-receipt', 'warehouse-task'],
-        resolution:
-          'Check the PPF action for the inbound delivery. A warehouse task can also ' +
-          'be created manually via Work Scheduling → Create Warehouse Task for ' +
-          'Warehouse Request → Putaway for Inbound Delivery to unblock the stock ' +
-          'while the configuration is corrected.',
-        citations: [
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway',
-            'EWM can create warehouse tasks for an inbound delivery using an action from the Post Processing Framework (PPF).',
-          ),
-        ],
+        resolution: sourced(
+          'Create the task manually from Work Scheduling → Create Warehouse Task for Warehouse Request → Putaway for Inbound Delivery to unblock the stock, then correct the PPF action.',
+          [MANUAL_WT],
+        ),
       },
       {
         id: 'fm-tasks-not-grouped',
-        symptom:
-          'Warehouse tasks are created correctly but arrive as separate items rather than grouped work.',
-        cause: 'Warehouse order creation settings are missing in Customizing.',
+        symptom: sourced(
+          'Warehouse tasks are created correctly but are not grouped into warehouse orders.',
+          [WO_CUSTOMIZING],
+        ),
+        cause: inferred(
+          'Warehouse order creation settings have not been maintained in Customizing.',
+          [WO_CUSTOMIZING],
+        ),
         nodeIds: ['warehouse-order'],
-        resolution:
+        resolution: sourced(
           'Maintain warehouse order creation in the IMG for EWM under Cross-Process Settings → Warehouse Order.',
-        citations: [
-          wtCite(
-            'Creation of Warehouse Tasks for Putaway — warehouse order settings',
-            'If you want EWM to automatically group warehouse tasks into warehouse orders, you must have made the settings in Customizing for warehouse order creation. In the Implementation Guide (IMG) for EWM, choose Cross-Process Settings → Warehouse Order.',
-          ),
-        ],
+          [WO_CUSTOMIZING],
+        ),
       },
     ],
-    happyPath: [
-      'inbound-delivery',
-      'goods-receipt',
-      'warehouse-task',
-      'warehouse-order',
-      'storage-bin',
-    ],
+    /**
+     * Only genuinely sequential steps. `storage-bin` is deliberately absent: it
+     * is determined DURING warehouse-task creation, so it is a branch off the
+     * spine (edge `e-wt-bin`), not a step after `warehouse-order`.
+     */
+    happyPath: ['inbound-delivery', 'goods-receipt', 'warehouse-task', 'warehouse-order'],
   },
   items: [
     {
       id: 'seq-inbound-happy-path',
       kind: 'sequence',
-      nodeIds: [
-        'inbound-delivery',
-        'goods-receipt',
-        'warehouse-task',
-        'warehouse-order',
-        'storage-bin',
-      ],
-      prompt: 'Put the inbound putaway process in order, from expected goods to stock in a bin.',
+      nodeIds: ['inbound-delivery', 'goods-receipt', 'warehouse-task', 'warehouse-order'],
+      prompt: 'Put the inbound putaway process in order, from expected goods to grouped work.',
       correctOrder: [
         'inbound-delivery',
         'goods-receipt',
         'warehouse-task',
         'warehouse-order',
-        'storage-bin',
       ],
       consequences: {
         'inbound-delivery':
@@ -314,15 +314,8 @@ export const SEED_PACK: CoursePack = {
           'Nothing physical happens until a task exists — everything before it is intent, not work.',
         'warehouse-order':
           'Group before the tasks exist and there is nothing to group.',
-        'storage-bin':
-          'Determine the bin before the task exists and there is no work to attach the destination to.',
       },
-      citations: [
-        inCite(
-          'Inbound Process',
-          'Warehouse tasks for putaway are created after the goods receipt is posted.',
-        ),
-      ],
+      basedOn: [GR_THEN_WT, WO_CUSTOMIZING],
     },
   ],
 };

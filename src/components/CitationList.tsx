@@ -1,20 +1,39 @@
 import { useState } from 'react';
 import type { Citation } from '../lib/types';
 
+interface CitationListProps {
+  citations: Citation[];
+  /**
+   * What these passages are doing.
+   *
+   * `source` — the documentation states the claim above; the quote is evidence.
+   * `support` — the claim above is Claude's reasoning and these are the
+   *   passages it drew on. They give the reader something to judge the
+   *   inference against; they do not establish it.
+   *
+   * The distinction is the whole point of the sourced/synthesis split, so the
+   * copy differs rather than reusing one neutral label for both.
+   */
+  role?: 'source' | 'support';
+}
+
 /**
- * Renders the sources behind a claim, and makes an unverified one look
- * unverified.
+ * Renders the passages behind a claim.
  *
- * The visual distinction is the point. A citation that carries a real SAP URL
- * but an unchecked quote is more dangerous than an obviously missing one,
- * because it reads as authority. Unverified citations therefore get amber
- * chrome and an explicit label rather than a quiet footnote.
+ * A quote that could not be located in the cited document gets amber chrome and
+ * says so in plain words. It is not called "unverified", which invited the
+ * reader to hear "not yet checked" when the accurate reading is "this text was
+ * not found where it claims to come from".
  */
-export function CitationList({ citations }: { citations: Citation[] }) {
+export function CitationList({ citations, role = 'source' }: CitationListProps) {
   const [open, setOpen] = useState(false);
   if (citations.length === 0) return null;
 
-  const unverified = citations.filter((c) => !c.verified).length;
+  const missing = citations.filter((c) => !c.quoteFound).length;
+  const label =
+    role === 'support'
+      ? `${citations.length} supporting passage${citations.length === 1 ? '' : 's'}`
+      : `${citations.length} source${citations.length === 1 ? '' : 's'}`;
 
   return (
     <div className="mt-3">
@@ -27,10 +46,10 @@ export function CitationList({ citations }: { citations: Citation[] }) {
           <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
           <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
         </svg>
-        {citations.length} source{citations.length === 1 ? '' : 's'}
-        {unverified > 0 && (
+        {label}
+        {missing > 0 && (
           <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-            {unverified} unverified
+            {missing} not found
           </span>
         )}
       </button>
@@ -41,21 +60,19 @@ export function CitationList({ citations }: { citations: Citation[] }) {
             <li
               key={i}
               className={`rounded-lg p-3 text-xs ring-1 ${
-                c.verified
-                  ? 'bg-slate-50 ring-slate-200'
-                  : 'bg-amber-50 ring-amber-200'
+                c.quoteFound ? 'bg-slate-50 ring-slate-200' : 'bg-amber-50 ring-amber-200'
               }`}
             >
               <div className="flex items-start justify-between gap-2">
                 <span className="font-semibold text-slate-700">{c.sourceTitle}</span>
-                {!c.verified && (
+                {!c.quoteFound && (
                   <span className="shrink-0 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
-                    unverified
+                    not found
                   </span>
                 )}
               </div>
               <p className="mt-1 text-slate-500">{c.locator}</p>
-              <p className="mt-2 italic text-slate-600">“{c.quote}”</p>
+              <p className="mt-2 italic text-slate-600">&ldquo;{c.quote}&rdquo;</p>
               {c.url && (
                 <a
                   href={c.url}
@@ -63,13 +80,13 @@ export function CitationList({ citations }: { citations: Citation[] }) {
                   rel="noopener noreferrer"
                   className="mt-2 inline-block font-medium text-blue-700 underline underline-offset-2"
                 >
-                  Check on SAP Help
+                  Read it on SAP Help
                 </a>
               )}
-              {!c.verified && (
+              {!c.quoteFound && (
                 <p className="mt-2 text-[11px] text-amber-800">
-                  This quote has not been checked against the live page. Confirm it
-                  before trusting anything built on it.
+                  This wording could not be located in the document it cites. Treat the
+                  claim above as unsupported until you have checked the page yourself.
                 </p>
               )}
             </li>

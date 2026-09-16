@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { listPacks, verificationStatus } from '../lib/packs';
+import { listPacks, packStanding } from '../lib/packs';
 import { VersionFooter } from './VersionFooter';
 
 /** Study home: the packs available, and the ways into each. */
@@ -20,7 +20,7 @@ export function HomeScreen() {
 
         <section className="mt-8 space-y-4">
           {packs.map((pack) => {
-            const v = verificationStatus(pack);
+            const standing = packStanding(pack);
             return (
               <article
                 key={pack.id}
@@ -34,19 +34,36 @@ export function HomeScreen() {
                 </h2>
                 <p className="mt-2 text-sm text-slate-600">{pack.process.summary}</p>
 
-                {!v.fullyVerified && (
-                  <div className="mt-4 rounded-lg bg-amber-50 ring-1 ring-amber-200 p-3">
-                    <p className="text-xs font-semibold text-amber-900">
-                      {v.verified} of {v.total} sources verified
+                <div className="mt-4 space-y-2">
+                  {/* Two numbers, not one percentage. Folding "the documentation
+                      says this" together with "Claude reasoned this" into a single
+                      score would repeat the overclaim the old verified badge made. */}
+                  <div className="rounded-lg bg-slate-50 ring-1 ring-slate-200 p-3">
+                    <p className="text-xs text-slate-600">
+                      <span className="font-semibold text-slate-800">
+                        {standing.sourcedClaimsWithFoundQuote} of {standing.sourcedClaims}
+                      </span>{' '}
+                      sourced claims rest on a quote located in the documentation.
                     </p>
-                    <p className="mt-1 text-xs text-amber-800">
-                      This pack is a development fixture. Its quotes have not been
-                      checked against the live SAP Help pages, and the reasoning on
-                      each step is model-authored. Read it to judge the format, not
-                      to learn the facts.
+                    <p className="mt-1 text-xs text-slate-600">
+                      <span className="font-semibold text-slate-800">{standing.synthesisCount}</span>{' '}
+                      passages are Claude&rsquo;s reasoning about the process, shown as such.
                     </p>
                   </div>
-                )}
+
+                  {standing.provenanceNotes.length > 0 && (
+                    <div className="rounded-lg bg-amber-50 ring-1 ring-amber-200 p-3">
+                      <p className="text-xs font-semibold text-amber-900">
+                        Source text is second-hand
+                      </p>
+                      {standing.provenanceNotes.map((note, i) => (
+                        <p key={i} className="mt-1 text-xs text-amber-800">
+                          {note}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 <div className="mt-4 grid grid-cols-2 gap-2">
                   <ModeLink to={`/pack/${pack.id}/map`} label="Map" primary />

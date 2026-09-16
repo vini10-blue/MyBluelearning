@@ -5,7 +5,11 @@ import type { SourceChunk } from './_sources.js';
  *
  * The model is asked to copy a verbatim quote from the chunk it cites. This
  * module then checks that the quote is actually there, and *the server* sets
- * the `verified` flag. The model never sets it.
+ * the `quoteFound` flag. The model never sets it.
+ *
+ * The flag is named for what it measures. It was called `verified`, which
+ * overclaimed: locating a string proves the string exists, not that it supports
+ * the claim printed above it.
  *
  * Why this matters more than it looks: the dangerous artifact is not an uncited
  * claim — those are obvious and the guard drops them. It is a citation carrying
@@ -25,8 +29,8 @@ export type VerificationFailure =
   | 'quote_not_in_source';
 
 export interface VerificationResult {
-  verified: boolean;
-  /** Why verification failed, for reporting at ingest. Absent when verified. */
+  quoteFound: boolean;
+  /** Why the lookup failed, for reporting at ingest. Absent when found. */
   reason?: VerificationFailure;
   /** The chunk the quote was found in — supplies the authoritative locator/url. */
   chunk?: SourceChunk;
@@ -37,8 +41,8 @@ export interface VerificationResult {
  *
  * Without a floor, a model could "verify" anything by quoting a single common
  * word: "EWM" appears in every chunk, so it would match, and the citation would
- * be marked verified while supporting nothing. The floor is what makes a
- * verified quote evidence rather than a formality.
+ * be marked found while supporting nothing. The floor is what makes a located
+ * quote evidence rather than a formality.
  */
 const MIN_QUOTE_CHARS = 40;
 
@@ -81,21 +85,21 @@ export function verifyQuote(
 ): VerificationResult {
   const candidates = chunks.filter((c) => c.sourceId === claimedSourceId);
   if (candidates.length === 0) {
-    return { verified: false, reason: 'source_not_found' };
+    return { quoteFound: false, reason: 'source_not_found' };
   }
 
   const needle = normalizeForMatch(quote);
   if (needle.length < MIN_QUOTE_CHARS) {
-    return { verified: false, reason: 'quote_too_short' };
+    return { quoteFound: false, reason: 'quote_too_short' };
   }
 
   for (const chunk of candidates) {
     if (normalizeForMatch(chunk.text).includes(needle)) {
-      return { verified: true, chunk };
+      return { quoteFound: true, chunk };
     }
   }
 
-  return { verified: false, reason: 'quote_not_in_source' };
+  return { quoteFound: false, reason: 'quote_not_in_source' };
 }
 
 export interface ClaimedCitation {
@@ -107,13 +111,13 @@ export interface ClaimedCitation {
 }
 
 export interface SettledCitation extends ClaimedCitation {
-  verified: boolean;
+  quoteFound: boolean;
 }
 
 /**
  * Settle every citation on a generated object.
  *
- * On a verified quote the chunk's own `locator` and `url` overwrite whatever
+ * On a located quote the chunk's own `locator` and `url` overwrite whatever
  * the model supplied. The model is a reliable copier of text and an unreliable
  * source of metadata — a plausible-looking page number it invented would send
  * the reader to the wrong place while the quote itself checked out.
@@ -127,18 +131,101 @@ export function settleCitations(
 
   for (const c of claimed) {
     const result = verifyQuote(c.sourceId, c.quote, chunks);
-    if (result.verified && result.chunk) {
+    if (result.quoteFound && result.chunk) {
       citations.push({
         ...c,
         locator: result.chunk.locator,
         url: result.chunk.url,
-        verified: true,
+        quoteFound: true,
       });
     } else {
       if (result.reason) failures.push(result.reason);
-      citations.push({ ...c, verified: false });
+      citations.push({ ...c, quoteFound: false });
     }
   }
 
   return { citations, failures };
+}
+
+/* ─────────────────────── literal token verification ─────────────────────── */
+
+export interface ClaimedToken {
+  value: string;
+  sourceId?: string;
+}
+
+export interface SettledToken {
+  value: string;
+  foundInSource: boolean;
+  citation?: SettledCitation;
+}
+
+/**
+ * Check a literal token — a transaction code, an IMG path, a table or object
+ * name — against the source.
+ *
+ * This is a stronger test than the prose quote match, and for a while it was
+ * the one the codebase did not do at all. A T-code is a literal string, so
+ * "does this exact token occur in the document" answers the question directly,
+ * with none of the paraphrase ambiguity that makes quote matching approximate.
+ *
+ * It also guards the highest-risk content in the app. A model produces
+ * plausible, well-formed, entirely fictional transaction codes readily, and an
+ * invented T-code inside a spaced-repetition schedule is drilled until it feels
+ * true. Everything else the guard does matters less than this.
+ *
+ * IMG and menu paths are normalised on their arrow separators, because the same
+ * path is written with `->`, `→` and `>` across SAP's own documentation and a
+ * learner searching for it will not care which.
+ */
+export function normalizeToken(s: string): string {
+  return normalizeForMatch(s)
+    .replace(/\s*(->|=>|>|\u2192|\u00bb)\s*/g, ' > ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function verifyToken(
+  token: string,
+  chunks: readonly SourceChunk[],
+  claimedSourceId?: string,
+): { foundInSource: boolean; chunk?: SourceChunk } {
+  const needle = normalizeToken(token);
+  // A one- or two-character "token" would match almost anything.
+  if (needle.length < 3) return { foundInSource: false };
+
+  const candidates = claimedSourceId
+    ? chunks.filter((c) => c.sourceId === claimedSourceId)
+    : chunks;
+
+  for (const chunk of candidates) {
+    if (normalizeToken(chunk.text).includes(needle)) {
+      return { foundInSource: true, chunk };
+    }
+  }
+  return { foundInSource: false };
+}
+
+/** Settle a list of claimed tokens, dropping nothing — the guard decides that. */
+export function settleTokens(
+  claimed: readonly ClaimedToken[],
+  chunks: readonly SourceChunk[],
+  sourceTitle: string,
+): SettledToken[] {
+  return claimed.map((t) => {
+    const { foundInSource, chunk } = verifyToken(t.value, chunks, t.sourceId);
+    if (!foundInSource || !chunk) return { value: t.value, foundInSource: false };
+    return {
+      value: t.value,
+      foundInSource: true,
+      citation: {
+        sourceId: chunk.sourceId,
+        sourceTitle,
+        locator: chunk.locator,
+        url: chunk.url,
+        quote: t.value,
+        quoteFound: true,
+      },
+    };
+  });
 }

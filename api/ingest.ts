@@ -427,7 +427,7 @@ export function settleProcessCitations(
     );
     const { citations, failures } = settleCitations(claimed, chunks);
     stats.citationsTotal += citations.length;
-    stats.citationsVerified += citations.filter((c) => c.verified).length;
+    stats.citationsVerified += citations.filter((c) => c.quoteFound).length;
     for (const f of failures) stats.failures[f] = (stats.failures[f] ?? 0) + 1;
     return citations.map((c) => ({ ...c, quote: scrubText(c.quote, 2_000) }));
   }

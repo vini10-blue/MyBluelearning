@@ -49,7 +49,7 @@ check(
     'sap-wt-putaway',
     'EWM can create warehouse tasks for an inbound delivery using an action from the Post Processing Framework (PPF).',
     chunks,
-  ).verified,
+  ).quoteFound,
 );
 
 console.log('\nCopying artifacts do not break a real quote');
@@ -59,7 +59,7 @@ check(
     'sap-wt-putaway',
     'EWM  can create warehouse tasks for an inbound delivery using an action from the Post\nProcessing Framework (PPF).',
     chunks,
-  ).verified,
+  ).quoteFound,
 );
 check(
   'case differences are tolerated',
@@ -67,7 +67,7 @@ check(
     'sap-wt-putaway',
     'ewm can create warehouse tasks for an inbound delivery using an action from the post processing framework (ppf).',
     chunks,
-  ).verified,
+  ).quoteFound,
 );
 
 console.log('\nA paraphrase is not a quote');
@@ -76,16 +76,16 @@ const paraphrase = verifyQuote(
   'EWM is able to generate warehouse tasks for inbound deliveries by means of a PPF action.',
   chunks,
 );
-check('paraphrase does not verify', !paraphrase.verified);
+check('paraphrase does not verify', !paraphrase.quoteFound);
 check('and the reason says so', paraphrase.reason === 'quote_not_in_source', paraphrase.reason);
 
 console.log('\nA short common phrase cannot buy verification');
 const tiny = verifyQuote('sap-wt-putaway', 'EWM', chunks);
-check('a 3-character quote is rejected', !tiny.verified);
+check('a 3-character quote is rejected', !tiny.quoteFound);
 check('rejected for length, not absence', tiny.reason === 'quote_too_short', tiny.reason);
 check(
   'a real but trivially common phrase is still too short',
-  !verifyQuote('sap-wt-putaway', 'warehouse tasks', chunks).verified,
+  !verifyQuote('sap-wt-putaway', 'warehouse tasks', chunks).quoteFound,
 );
 
 console.log('\nReal text attributed to the wrong document does not verify');
@@ -94,7 +94,7 @@ const misattributed = verifyQuote(
   'EWM can create warehouse tasks for an inbound delivery using an action from the Post Processing Framework (PPF).',
   chunks,
 );
-check('quote from another source does not verify', !misattributed.verified);
+check('quote from another source does not verify', !misattributed.quoteFound);
 check(
   'because the citation would point at a page without the text',
   misattributed.reason === 'quote_not_in_source',
@@ -119,7 +119,7 @@ const settled = settleCitations(
   ],
   chunks,
 );
-check('the citation verifies', settled.citations[0].verified);
+check('the citation verifies', settled.citations[0].quoteFound);
 check(
   'the model-supplied locator is overwritten with the chunk’s',
   settled.citations[0].locator === 'Creation of Warehouse Tasks for Putaway — part 1',
@@ -144,7 +144,7 @@ check(
 );
 check(
   'a sentence from the middle is still findable',
-  verifyQuote('s', REAL_TEXT, many).verified,
+  verifyQuote('s', REAL_TEXT, many).quoteFound,
 );
 
 console.log('\nHTML extraction produces matchable prose');
