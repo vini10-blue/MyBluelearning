@@ -8,8 +8,8 @@ import type { VerifiedUser } from './_verifyToken.js';
 import { checkRateLimit } from './_rateLimit.js';
 import { SourceError, fetchSapHelpPage } from './_sources.js';
 import type { SourceChunk, SourceRef } from './_sources.js';
-import { settleCitations } from './_verifyQuotes.js';
-import type { ClaimedCitation } from './_verifyQuotes.js';
+import { settleCitations, settleTokens } from './_verifyQuotes.js';
+import type { ClaimedCitation, SettledToken } from './_verifyQuotes.js';
 
 /**
  * POST /api/ingest
@@ -28,23 +28,37 @@ import type { ClaimedCitation } from './_verifyQuotes.js';
  * duration, so a single call that ingested a whole document would time out on
  * anything real. Bounded work per call, sequenced by the caller.
  *
+ * ── Sourced claims vs synthesis ──
+ *
+ * An earlier version of this endpoint asked for one `citations` array per node
+ * covering every field on it, and told the model to omit any node whose `why`
+ * it could not take from the source. That instruction was incoherent with the
+ * job: technical documentation states what a system does and almost never why.
+ * Obeying it literally produces empty models; disobeying it produces inference
+ * wearing a citation that supports only the neighbouring `what`.
+ *
+ * So the schema now distinguishes them. `what`, edge labels, failure symptoms
+ * and resolutions are SourcedClaims that must quote the document. `why` and
+ * `breaksIf` are Synthesis: the model's reasoning, explicitly labelled, with
+ * the passages it drew on. Inference is expected there and banned absolutely
+ * for literal tokens, which are checked character by character.
+ *
  * Model notes:
  * - Opus 5. This is not the receipt-extraction job the expenses app does — it
  *   is reading technical documentation and building a causal model of a
- *   process, including why each step exists and what fails without it. That is
- *   the reasoning tier.
+ *   process. That is the reasoning tier.
  * - Adaptive thinking. It is on by default on Opus 5, and disabling it also
- *   risks tool-call-shaped text leaking into the visible response, so it stays.
+ *   risks tool-call-shaped text leaking into the visible response.
  * - Streaming with `.finalMessage()` because the process model can be a large
  *   JSON payload and a non-streaming request that size risks an HTTP timeout.
  * - The source chunks are cached: pass 2 sends the same chunks as pass 1, and
  *   a retry re-sends them again.
  * - Structured outputs and Anthropic's native citations are mutually exclusive
  *   (the combination is a 400), which is one more reason citations here are
- *   verified mechanically against the chunk text instead.
+ *   checked mechanically against the chunk text instead.
  */
 
-/** Citation shape the model produces. Note what is absent: `verified`. */
+/** Citation shape the model produces. Note what is absent: `quoteFound`. */
 const CITATION_SCHEMA = {
   type: 'object',
   properties: {
@@ -58,6 +72,39 @@ const CITATION_SCHEMA = {
     },
   },
   required: ['sourceId', 'sourceTitle', 'locator', 'quote'],
+  additionalProperties: false,
+} as const;
+
+/** Something the documentation states. Must quote it. */
+const SOURCED_CLAIM_SCHEMA = {
+  type: 'object',
+  properties: {
+    text: { type: 'string', description: 'The claim, in your own concise wording.' },
+    citations: { type: 'array', items: CITATION_SCHEMA, minItems: 1 },
+  },
+  required: ['text', 'citations'],
+  additionalProperties: false,
+} as const;
+
+/** Your reasoning about the process. Inference is expected here. */
+const SYNTHESIS_SCHEMA = {
+  type: 'object',
+  properties: {
+    text: { type: 'string' },
+    origin: {
+      type: 'string',
+      enum: ['stated', 'inferred'],
+      description:
+        'Use "stated" ONLY when the source says this outright and your quote carries the reasoning itself. Otherwise "inferred". Most process reasoning is inferred; saying so is correct, not a weakness.',
+    },
+    basedOn: {
+      type: 'array',
+      items: CITATION_SCHEMA,
+      description:
+        'Passages your reasoning draws on, so a reader can judge it. May be empty for pure inference.',
+    },
+  },
+  required: ['text', 'origin', 'basedOn'],
   additionalProperties: false,
 } as const;
 
@@ -78,22 +125,22 @@ const PROCESS_SCHEMA = {
           id: { type: 'string', description: 'kebab-case, stable, e.g. "warehouse-task".' },
           label: { type: 'string' },
           kind: { type: 'string', enum: ['step', 'document', 'object', 'decision', 'system'] },
-          what: { type: 'string', description: 'What this is. One or two sentences.' },
-          why: {
-            type: 'string',
+          what: SOURCED_CLAIM_SCHEMA,
+          why: SYNTHESIS_SCHEMA,
+          breaksIf: SYNTHESIS_SCHEMA,
+          tcodes: {
+            type: 'array',
+            items: { type: 'string' },
             description:
-              'WHY this step exists in the process — what it makes possible, what it authorises, what problem it solves. Not a restatement of what it is.',
+              'Transaction codes that appear VERBATIM in the chunk text. Never from memory — these are checked literally and dropped if absent.',
           },
-          breaksIf: {
-            type: 'string',
+          configPath: {
+            anyOf: [{ type: 'string' }, { type: 'null' }],
             description:
-              'What goes wrong DOWNSTREAM if this is skipped, missing or misconfigured. Be concrete about the observable symptom.',
+              'Customizing / IMG path, copied verbatim from the chunk text. Null if the chunks do not give one.',
           },
-          tcodes: { type: 'array', items: { type: 'string' } },
-          configPath: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-          citations: { type: 'array', items: CITATION_SCHEMA, minItems: 1 },
         },
-        required: ['id', 'label', 'kind', 'what', 'why', 'breaksIf', 'citations'],
+        required: ['id', 'label', 'kind', 'what', 'why', 'breaksIf', 'tcodes'],
         additionalProperties: false,
       },
     },
@@ -105,11 +152,10 @@ const PROCESS_SCHEMA = {
           id: { type: 'string' },
           from: { type: 'string' },
           to: { type: 'string' },
-          label: { type: 'string', description: 'What flows, or what triggers the next step.' },
+          label: SOURCED_CLAIM_SCHEMA,
           condition: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-          citations: { type: 'array', items: CITATION_SCHEMA, minItems: 1 },
         },
-        required: ['id', 'from', 'to', 'label', 'citations'],
+        required: ['id', 'from', 'to', 'label'],
         additionalProperties: false,
       },
     },
@@ -119,20 +165,20 @@ const PROCESS_SCHEMA = {
         type: 'object',
         properties: {
           id: { type: 'string' },
-          symptom: { type: 'string', description: 'What the practitioner observes.' },
-          cause: { type: 'string' },
+          symptom: SOURCED_CLAIM_SCHEMA,
+          cause: SYNTHESIS_SCHEMA,
           nodeIds: { type: 'array', items: { type: 'string' } },
-          resolution: { type: 'string' },
-          citations: { type: 'array', items: CITATION_SCHEMA, minItems: 1 },
+          resolution: SOURCED_CLAIM_SCHEMA,
         },
-        required: ['id', 'symptom', 'cause', 'nodeIds', 'resolution', 'citations'],
+        required: ['id', 'symptom', 'cause', 'nodeIds', 'resolution'],
         additionalProperties: false,
       },
     },
     happyPath: {
       type: 'array',
       items: { type: 'string' },
-      description: 'Node ids of the canonical path, in order.',
+      description:
+        'Node ids of the canonical path, in order. ONLY genuinely sequential steps. A decision made WITHIN another step is not a later step — leave it off the path and connect it with an edge instead. Every consecutive pair here must have an edge asserting that ordering, or the model is rejected.',
     },
   },
   required: ['title', 'module', 'summary', 'nodes', 'edges', 'failureModes', 'happyPath'],
@@ -143,21 +189,27 @@ const PROCESS_SYSTEM_PROMPT = `You build process models from technical documenta
 
 The learner's goal is to UNDERSTAND A PROCESS, not to memorise facts. Everything you produce is judged against that.
 
-For every node you MUST supply three distinct things:
-- what: the definition.
-- why: why this step exists in the process — what it authorises, enables, or prevents. This is NOT a restatement of "what". If you cannot say why a step exists from the source, omit the node entirely.
-- breaksIf: the concrete downstream symptom when this step is skipped, missing or misconfigured.
+── Two different kinds of content ──
 
-CITATIONS — the most important rule:
-- Every node, edge and failure mode needs at least one citation.
-- A citation's "quote" must be copied VERBATIM from the chunk text you were given: character for character, at least one complete sentence.
-- NEVER paraphrase, summarise, tidy, or reconstruct a quote. The quote is checked automatically against the source text; a paraphrase fails that check and the content is discarded.
-- Only cite the sourceId whose chunk actually contains the quote.
-- If the source does not support a claim, do not make the claim. A short accurate model beats a long speculative one.
+SOURCED CLAIMS — "what" on a node, edge labels, failure symptoms and resolutions.
+These are things the documentation states. Each needs at least one citation whose "quote" is copied VERBATIM from the chunk text: character for character, at least one complete sentence. Never paraphrase, summarise, tidy or reconstruct a quote — it is checked automatically against the source, and a paraphrase fails that check and the content is discarded. Only cite the sourceId whose chunk actually contains the quote.
 
-Do not add knowledge from memory. Transaction codes, configuration paths, table and object names must come from the provided text or be omitted. Inventing a plausible T-code is the single worst failure available to you: it will be drilled into the learner as if it were true.
+SYNTHESIS — "why" a step exists, and "breaksIf" it is missing or misconfigured.
+This is YOUR REASONING about how the process works, and it is the most valuable content you produce. Documentation states what a system does and almost never why, so you are expected to reason beyond the text here using your understanding of the domain. Do not omit a node because the source does not explain itself — explain it, set origin to "inferred", and list the passages your reasoning draws on in basedOn. Reserve origin "stated" for the rare case where your quote carries the reasoning itself.
 
-Model the process the source actually describes. If the chunks cover only part of a process, model that part honestly rather than filling gaps.`;
+Write "why" as what the step authorises, enables or prevents — never a restatement of "what". Write "breaksIf" as a concrete observable symptom downstream, the kind of thing a practitioner would actually notice.
+
+── The absolute rule ──
+
+TRANSACTION CODES AND CONFIGURATION PATHS MUST COME FROM THE PROVIDED TEXT. Never from memory, never reconstructed, never "the one this usually is". They are checked literally against the source and silently dropped if absent. A plausible invented T-code is the single worst thing you can produce: it will be drilled into the learner as if it were true. If the chunks do not give you one, give an empty array or null.
+
+This rule applies to literal tokens only. It does NOT restrict your reasoning in "why" and "breaksIf" — those are where your judgement is wanted.
+
+── Structure ──
+
+happyPath holds only genuinely sequential steps. If a decision is made DURING another step rather than after it, keep it off the path and connect it with an edge. Every consecutive pair on the path must have an edge asserting that ordering; a path that claims an ordering no edge supports is rejected outright.
+
+Model the process the source actually describes. If the chunks cover only part of one, model that part honestly rather than filling gaps.`;
 
 interface IngestBody {
   pass?: 'process' | 'items';
@@ -192,12 +244,12 @@ function applyResponseHeaders(res: VercelResponse, origin: string | undefined): 
 /**
  * Strip control characters and anything credential-shaped from model-authored
  * free text. A hostile or poisoned source document could in principle coax the
- * model into echoing a token back through a `quote` or `why` field.
+ * model into echoing a token back through a quote or a `why`.
  */
 function scrubText(s: string, maxLen: number): string {
   return s
     // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/[ -]/g, ' ')
     .replace(/Bearer\s+[\w.\-]+/gi, '[redacted]')
     .replace(/eyJ[\w.\-]{20,}/g, '[redacted]')
     .slice(0, maxLen);
@@ -256,9 +308,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'bad_request', requestId });
   }
 
-  // 50s client timeout leaves headroom under the function ceiling so the SDK
-  // fails with a typed error rather than being killed mid-call.
-  const client = new Anthropic({ apiKey: anthropicApiKey, timeout: 50_000 });
+  /**
+   * The SDK timeout sits just under the function's own ceiling (300s, set for
+   * this route in vercel.json) so a slow call fails as a typed SDK error we can
+   * report, rather than the platform killing the function mid-flight with no
+   * usable response. These two numbers must move together.
+   */
+  const client = new Anthropic({ apiKey: anthropicApiKey, timeout: 280_000 });
 
   try {
     if (body.pass === 'process') {
@@ -353,7 +409,7 @@ async function runProcessPass(
             },
             {
               type: 'text',
-              text: 'Build the process model as JSON. Quote verbatim; omit anything the chunks do not support.',
+              text: 'Build the process model as JSON. Quote verbatim for sourced claims; reason freely in why and breaksIf; take transaction codes and config paths only from the text above.',
             },
           ],
         },
@@ -373,8 +429,7 @@ async function runProcessPass(
     return res.status(502).json({ error: 'unparseable_response', requestId });
   }
 
-  // ---- The citation guard, applied server-side. ----
-  const { model: settledProcess, stats } = settleProcessCitations(parsed, used);
+  const { model: settledProcess, stats } = settleProcessModel(parsed, used, source.title);
 
   return res.status(200).json({
     process: settledProcess,
@@ -404,22 +459,35 @@ function escapeAttr(s: string): string {
 
 export interface VerificationStats {
   citationsTotal: number;
-  citationsVerified: number;
+  citationsFound: number;
+  tokensTotal: number;
+  tokensFound: number;
   failures: Record<string, number>;
 }
 
 /**
- * Walk everything the model produced and settle each citation against the
- * chunks. The model's own view of whether a citation is trustworthy is never
- * consulted, because the schema never let it express one.
+ * Settle everything the model produced against the source chunks.
+ *
+ * The model's own view of whether its content is trustworthy is never
+ * consulted, because the schema never let it express one: there is no
+ * `quoteFound` field and no `foundInSource` field for it to fill in. Those are
+ * decided here, by comparison, and the guard in validateCoursePack then decides
+ * what survives.
  */
-export function settleProcessCitations(
+export function settleProcessModel(
   parsed: unknown,
   chunks: readonly SourceChunk[],
+  sourceTitle: string,
 ): { model: unknown; stats: VerificationStats } {
-  const stats: VerificationStats = { citationsTotal: 0, citationsVerified: 0, failures: {} };
+  const stats: VerificationStats = {
+    citationsTotal: 0,
+    citationsFound: 0,
+    tokensTotal: 0,
+    tokensFound: 0,
+    failures: {},
+  };
 
-  function settle(list: unknown): unknown {
+  function settleCitationArray(list: unknown) {
     if (!Array.isArray(list)) return [];
     const claimed = list.filter(
       (c): c is ClaimedCitation =>
@@ -427,30 +495,85 @@ export function settleProcessCitations(
     );
     const { citations, failures } = settleCitations(claimed, chunks);
     stats.citationsTotal += citations.length;
-    stats.citationsVerified += citations.filter((c) => c.quoteFound).length;
+    stats.citationsFound += citations.filter((c) => c.quoteFound).length;
     for (const f of failures) stats.failures[f] = (stats.failures[f] ?? 0) + 1;
     return citations.map((c) => ({ ...c, quote: scrubText(c.quote, 2_000) }));
   }
 
-  function settleCollection(items: unknown): unknown[] {
-    if (!Array.isArray(items)) return [];
-    return items.map((item) => {
-      if (!item || typeof item !== 'object') return item;
-      const rec = item as Record<string, unknown>;
-      return { ...rec, citations: settle(rec.citations) };
-    });
+  /** `{ text, citations }` — the citations decide whether the claim survives. */
+  function settleClaim(raw: unknown) {
+    if (!raw || typeof raw !== 'object') return raw;
+    const claim = raw as Record<string, unknown>;
+    return {
+      ...claim,
+      text: typeof claim.text === 'string' ? scrubText(claim.text, 2_000) : claim.text,
+      citations: settleCitationArray(claim.citations),
+    };
+  }
+
+  /** `{ text, origin, basedOn }` — kept regardless, but its support is checked. */
+  function settleSynthesis(raw: unknown) {
+    if (!raw || typeof raw !== 'object') return raw;
+    const syn = raw as Record<string, unknown>;
+    return {
+      ...syn,
+      text: typeof syn.text === 'string' ? scrubText(syn.text, 2_000) : syn.text,
+      basedOn: settleCitationArray(syn.basedOn),
+    };
+  }
+
+  /** Literal tokens: checked character by character, never trusted from memory. */
+  function settleTokenList(raw: unknown): SettledToken[] {
+    if (!Array.isArray(raw)) return [];
+    const claimed = raw
+      .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+      .map((value) => ({ value }));
+    const settled = settleTokens(claimed, chunks, sourceTitle);
+    stats.tokensTotal += settled.length;
+    stats.tokensFound += settled.filter((t) => t.foundInSource).length;
+    return settled;
+  }
+
+  function settleSingleToken(raw: unknown): SettledToken | undefined {
+    if (typeof raw !== 'string' || raw.trim().length === 0) return undefined;
+    const [settled] = settleTokens([{ value: raw }], chunks, sourceTitle);
+    stats.tokensTotal += 1;
+    if (settled?.foundInSource) stats.tokensFound += 1;
+    return settled;
   }
 
   if (!parsed || typeof parsed !== 'object') return { model: parsed, stats };
   const p = parsed as Record<string, unknown>;
 
-  return {
-    model: {
-      ...p,
-      nodes: settleCollection(p.nodes),
-      edges: settleCollection(p.edges),
-      failureModes: settleCollection(p.failureModes),
-    },
-    stats,
-  };
+  const nodes = (Array.isArray(p.nodes) ? p.nodes : []).map((n) => {
+    if (!n || typeof n !== 'object') return n;
+    const node = n as Record<string, unknown>;
+    return {
+      ...node,
+      what: settleClaim(node.what),
+      why: settleSynthesis(node.why),
+      breaksIf: settleSynthesis(node.breaksIf),
+      tcodes: settleTokenList(node.tcodes),
+      configPath: settleSingleToken(node.configPath),
+    };
+  });
+
+  const edges = (Array.isArray(p.edges) ? p.edges : []).map((e) => {
+    if (!e || typeof e !== 'object') return e;
+    const edge = e as Record<string, unknown>;
+    return { ...edge, label: settleClaim(edge.label) };
+  });
+
+  const failureModes = (Array.isArray(p.failureModes) ? p.failureModes : []).map((f) => {
+    if (!f || typeof f !== 'object') return f;
+    const fm = f as Record<string, unknown>;
+    return {
+      ...fm,
+      symptom: settleClaim(fm.symptom),
+      cause: settleSynthesis(fm.cause),
+      resolution: settleClaim(fm.resolution),
+    };
+  });
+
+  return { model: { ...p, nodes, edges, failureModes }, stats };
 }
