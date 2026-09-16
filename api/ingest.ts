@@ -211,6 +211,169 @@ happyPath holds only genuinely sequential steps. If a decision is made DURING an
 
 Model the process the source actually describes. If the chunks cover only part of one, model that part honestly rather than filling gaps.`;
 
+/**
+ * A multiple-response question.
+ *
+ * `correctIndices` is the highest-stakes field the pipeline produces and the
+ * only one no mechanical check can reach. A quote can be located; an answer key
+ * cannot be. Everything about how this is prompted and rendered follows from
+ * that: ask for fewer items at higher confidence, and make every one of them
+ * killable by the learner in one tap.
+ */
+const CHOICES_SCHEMA = {
+  type: 'object',
+  properties: {
+    options: { type: 'array', items: { type: 'string' }, minItems: 3 },
+    correctIndices: {
+      type: 'array',
+      items: { type: 'integer' },
+      minItems: 1,
+      description:
+        'Zero-based indices of EVERY correct option. Use more than one where the material genuinely supports it — SAP exams routinely ask for two or three.',
+    },
+    rationales: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'One per option, same order: why it is right or wrong. Shown after answering, including for the options the learner did not pick.',
+    },
+    revealCount: {
+      type: 'boolean',
+      description: 'True to tell the learner how many answers are correct, as SAP does.',
+    },
+  },
+  required: ['options', 'correctIndices', 'rationales', 'revealCount'],
+  additionalProperties: false,
+} as const;
+
+const ITEM_BASE_PROPS = {
+  id: { type: 'string', description: 'kebab-case and unique within the pack.' },
+  nodeIds: {
+    type: 'array',
+    items: { type: 'string' },
+    description: 'Ids of the process nodes this item exercises.',
+  },
+  basedOn: {
+    type: 'array',
+    items: CITATION_SCHEMA,
+    description: 'Passages behind the item, so an answer can be checked. Quote verbatim.',
+  },
+} as const;
+
+const ITEMS_SCHEMA = {
+  type: 'object',
+  properties: {
+    trace: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          ...ITEM_BASE_PROPS,
+          given: { type: 'string', description: 'The starting document or object, and its state.' },
+          question: { type: 'string' },
+          choices: CHOICES_SCHEMA,
+        },
+        required: ['id', 'nodeIds', 'basedOn', 'given', 'question', 'choices'],
+        additionalProperties: false,
+      },
+    },
+    breakIt: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          ...ITEM_BASE_PROPS,
+          scenario: {
+            type: 'string',
+            description:
+              'A failure as a practitioner would meet it: what was done, what was expected, what happened instead.',
+          },
+          steps: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              properties: {
+                question: { type: 'string' },
+                choices: CHOICES_SCHEMA,
+                outcomes: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'One per option: what the learner would OBSERVE after choosing it. Consequences, not verdicts.',
+                },
+              },
+              required: ['question', 'choices', 'outcomes'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['id', 'nodeIds', 'basedOn', 'scenario', 'steps'],
+        additionalProperties: false,
+      },
+    },
+    configure: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          ...ITEM_BASE_PROPS,
+          requirement: {
+            type: 'string',
+            description: 'A business requirement stated as a concrete warehouse situation.',
+          },
+          choices: CHOICES_SCHEMA,
+        },
+        required: ['id', 'nodeIds', 'basedOn', 'requirement', 'choices'],
+        additionalProperties: false,
+      },
+    },
+    recall: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          ...ITEM_BASE_PROPS,
+          front: { type: 'string' },
+          back: { type: 'string' },
+        },
+        required: ['id', 'nodeIds', 'basedOn', 'front', 'back'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['trace', 'breakIt', 'configure', 'recall'],
+  additionalProperties: false,
+} as const;
+
+const ITEMS_SYSTEM_PROMPT = `You write practice items for a study tool, from a process model and the source passages it was built from.
+
+The learner is preparing for a scenario-based certification and wants to UNDERSTAND the process, not memorise it. Items that test recognition of a definition are close to worthless here. Items that make him reason about cause and consequence are the product.
+
+── The thing you cannot get wrong ──
+
+You are choosing answer keys, and NOTHING checks them. Quotes in this system are verified automatically; correctIndices is not and cannot be. A wrong answer key is worse than a missing item, because it will be drilled under spaced repetition until the learner believes it.
+
+So: write FEWER items at higher confidence. If the process model and passages do not firmly settle which option is right, do not write that item. Six items you are certain of beat twenty you are fairly sure of. It is entirely acceptable to return an empty array for a category the material does not support.
+
+── The item types ──
+
+trace — given a document or object in a state, what is created next and posted where. Tests document flow.
+
+breakIt — the most valuable type. A realistic failure, diagnosed in one or more steps. Draw on the process model's failureModes and on each node's breaksIf. In "outcomes", say what the learner would OBSERVE after each choice, including the wrong ones — a consequence teaches, a verdict does not.
+
+configure — a business requirement in, the correct configuration decision out. This mirrors the exam's own format most closely.
+
+recall — deliberately last and deliberately few. Only for literal detail that must become automatic. ONLY use transaction codes and configuration paths that appear in the process model you were given; never introduce one from memory.
+
+── Answer construction ──
+
+Use multi-select where the material genuinely supports more than one correct answer; single-answer where it does not. Do not manufacture multi-select for variety.
+
+Wrong options must be plausible to someone who half-knows the process — a common confusion, an adjacent object, a step from the wrong phase. Never filler, never absurd. Every option needs a rationale, including the correct ones.
+
+Quote verbatim in basedOn, from the passages given. These are checked automatically.`
+
 interface IngestBody {
   pass?: 'process' | 'items';
   source?: SourceRef;
@@ -320,7 +483,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.pass === 'process') {
       return await runProcessPass(client, body, res, requestId);
     }
-    return res.status(501).json({ error: 'items_pass_not_implemented', requestId });
+    return await runItemsPass(client, body, res, requestId);
   } catch (err) {
     if (err instanceof SourceError) {
       return res.status(err.status).json({ error: err.code, detail: err.message, requestId });
@@ -576,4 +739,226 @@ export function settleProcessModel(
   });
 
   return { model: { ...p, nodes, edges, failureModes }, stats };
+}
+
+/* ────────────────────────────── pass 2 ────────────────────────────── */
+
+interface MinimalNode {
+  id: string;
+  label: string;
+  kind: string;
+  what: { text: string };
+  why: { text: string };
+  breaksIf: { text: string };
+  tcodes?: { value: string }[];
+  configPath?: { value: string };
+}
+
+interface MinimalProcess {
+  title?: string;
+  module?: string;
+  nodes?: MinimalNode[];
+  edges?: { from: string; to: string; label?: { text: string } }[];
+  failureModes?: { symptom?: { text: string }; cause?: { text: string }; resolution?: { text: string } }[];
+  happyPath?: string[];
+}
+
+/**
+ * Render the process model as prose for the items prompt.
+ *
+ * Passing the raw JSON back would spend most of the context on citation objects
+ * the item writer has no use for — it needs the shape of the process and the
+ * reasoning, and quotes it to the source separately.
+ */
+function describeProcess(proc: MinimalProcess): string {
+  const nodes = (proc.nodes ?? [])
+    .map((n) => {
+      const bits = [
+        `- ${n.id} (${n.label}, ${n.kind})`,
+        `  what: ${n.what?.text ?? ''}`,
+        `  why: ${n.why?.text ?? ''}`,
+        `  breaks if missing: ${n.breaksIf?.text ?? ''}`,
+      ];
+      if (n.tcodes?.length) bits.push(`  t-codes: ${n.tcodes.map((t) => t.value).join(', ')}`);
+      if (n.configPath) bits.push(`  config path: ${n.configPath.value}`);
+      return bits.join('\n');
+    })
+    .join('\n');
+
+  const edges = (proc.edges ?? [])
+    .map((e) => `- ${e.from} -> ${e.to}: ${e.label?.text ?? ''}`)
+    .join('\n');
+
+  const failures = (proc.failureModes ?? [])
+    .map(
+      (f) =>
+        `- symptom: ${f.symptom?.text ?? ''}\n  cause: ${f.cause?.text ?? ''}\n  fix: ${f.resolution?.text ?? ''}`,
+    )
+    .join('\n');
+
+  return [
+    `PROCESS: ${proc.title ?? ''} (${proc.module ?? ''})`,
+    `HAPPY PATH: ${(proc.happyPath ?? []).join(' -> ')}`,
+    '',
+    'NODES:',
+    nodes,
+    '',
+    'EDGES:',
+    edges,
+    '',
+    'KNOWN FAILURE MODES:',
+    failures || '(none recorded)',
+  ].join('\n');
+}
+
+/**
+ * Build the Sequence-it item from the process model rather than asking for it.
+ *
+ * The happy path already IS the correct order, and each node already states
+ * what breaks without it — so generating this item would be asking the model to
+ * restate data it was just given, with a fresh chance to get it wrong. Deriving
+ * it means a Sequence drill can only be wrong if the process model is wrong,
+ * which the guard already checks (every consecutive pair needs an edge). One
+ * fewer unverifiable answer key.
+ */
+function deriveSequenceItem(proc: MinimalProcess): unknown | null {
+  const path = proc.happyPath ?? [];
+  if (path.length < 3) return null;
+  const byId = new Map((proc.nodes ?? []).map((n) => [n.id, n]));
+
+  const consequences: Record<string, string> = {};
+  for (const id of path) {
+    const node = byId.get(id);
+    if (node?.breaksIf?.text) consequences[id] = node.breaksIf.text;
+  }
+
+  return {
+    id: 'sequence-happy-path',
+    kind: 'sequence',
+    nodeIds: path,
+    basedOn: [],
+    prompt: `Put ${proc.title ?? 'the process'} in order, from start to finish.`,
+    correctOrder: path,
+    consequences,
+  };
+}
+
+async function runItemsPass(
+  client: Anthropic,
+  body: IngestBody,
+  res: VercelResponse,
+  requestId: string,
+) {
+  const proc = body.process as MinimalProcess | undefined;
+  const chunks = Array.isArray(body.chunks) ? body.chunks : [];
+
+  if (!proc || !Array.isArray(proc.nodes) || proc.nodes.length === 0) {
+    return res.status(400).json({ error: 'bad_request', detail: 'No process model.', requestId });
+  }
+  if (chunks.length === 0) {
+    return res
+      .status(400)
+      .json({ error: 'bad_request', detail: 'No source chunks to cite.', requestId });
+  }
+
+
+  const chunkBlock = chunks
+    .map(
+      (c, i) =>
+        `<chunk index="${i}" sourceId="${c.sourceId}" locator="${escapeAttr(c.locator)}">\n${c.text}\n</chunk>`,
+    )
+    .join('\n\n');
+
+  const response = await client.messages
+    .stream({
+      model: 'claude-opus-5',
+      max_tokens: 32_000,
+      thinking: { type: 'adaptive' },
+      output_config: {
+        effort: 'high',
+        format: { type: 'json_schema', schema: ITEMS_SCHEMA },
+      },
+      system: [
+        { type: 'text', text: ITEMS_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+      ],
+      messages: [
+        {
+          role: 'user',
+          content: [
+            // Same chunk block as pass 1, in the same position, so the cache
+            // written there is read here rather than paid for twice.
+            { type: 'text', text: chunkBlock, cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: describeProcess(proc) },
+            {
+              type: 'text',
+              text: 'Write the practice items as JSON. Fewer and certain beats more and plausible — return an empty array for any category this material does not firmly settle.',
+            },
+          ],
+        },
+      ],
+    })
+    .finalMessage();
+
+  const raw = response.content.find((b) => b.type === 'text');
+  if (!raw || raw.type !== 'text') {
+    return res.status(502).json({ error: 'empty_response', requestId });
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw.text) as Record<string, unknown>;
+  } catch {
+    return res.status(502).json({ error: 'unparseable_response', requestId });
+  }
+
+  const stats = { citationsTotal: 0, citationsFound: 0, failures: {} as Record<string, number> };
+
+  function settleBasedOn(list: unknown) {
+    if (!Array.isArray(list)) return [];
+    const claimed = list.filter(
+      (c): c is ClaimedCitation =>
+        Boolean(c) && typeof c === 'object' && typeof (c as ClaimedCitation).quote === 'string',
+    );
+    const { citations, failures } = settleCitations(claimed, chunks);
+    stats.citationsTotal += citations.length;
+    stats.citationsFound += citations.filter((c) => c.quoteFound).length;
+    for (const f of failures) stats.failures[f] = (stats.failures[f] ?? 0) + 1;
+    return citations.map((c) => ({ ...c, quote: scrubText(c.quote, 2_000) }));
+  }
+
+  function collect(key: string, kind: string): unknown[] {
+    const list = parsed[key];
+    if (!Array.isArray(list)) return [];
+    return list.map((raw) => {
+      const item = raw as Record<string, unknown>;
+      return { ...item, kind, basedOn: settleBasedOn(item.basedOn) };
+    });
+  }
+
+  const items = [
+    ...collect('trace', 'trace'),
+    ...collect('breakIt', 'break'),
+    ...collect('configure', 'configure'),
+    ...collect('recall', 'recall'),
+  ];
+
+  const derived = deriveSequenceItem(proc);
+  if (derived) items.unshift(derived);
+
+  return res.status(200).json({
+    items,
+    verification: stats,
+    /**
+     * Said out loud in the response because it is the pipeline's real limit:
+     * quotes are checked, answer keys are not. The client surfaces this, and it
+     * is why every item is flaggable.
+     */
+    unverifiable: 'Answer keys (correctIndices) are model judgement and are not checked by anything. Review them.',
+    usage: {
+      input_tokens: response.usage.input_tokens,
+      output_tokens: response.usage.output_tokens,
+      cache_read_input_tokens: response.usage.cache_read_input_tokens,
+    },
+    requestId,
+  });
 }

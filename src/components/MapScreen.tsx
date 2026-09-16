@@ -1,5 +1,8 @@
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getPack } from '../lib/packs';
+import { flagsForPack, rejectFlagged } from '../lib/contentFlags';
+import { FlagButton } from './FlagButton';
 import type {
   NodeKind,
   ProcessEdge,
@@ -27,6 +30,8 @@ export function MapScreen() {
   const { packId, nodeId } = useParams();
   const navigate = useNavigate();
   const pack = getPack(packId);
+  // Bumped whenever a flag changes, to re-read the (localStorage-backed) list.
+  const [flagTick, setFlagTick] = useState(0);
 
   if (!pack) {
     return (
@@ -40,7 +45,19 @@ export function MapScreen() {
   }
 
   const { process } = pack;
-  const byId = new Map(process.nodes.map((n) => [n.id, n]));
+
+  /**
+   * Content the learner has marked wrong is removed, not annotated. Leaving a
+   * known-wrong step on the map with a warning would put the burden back on him
+   * to remember, every time, which parts are untrue.
+   */
+  void flagTick;
+  const flaggedIds = new Set(flagsForPack(pack.id).map((f) => f.targetId));
+  const liveNodes = rejectFlagged(pack.id, process.nodes);
+  const liveEdges = process.edges.filter(
+    (e) => !flaggedIds.has(e.from) && !flaggedIds.has(e.to) && !flaggedIds.has(e.id),
+  );
+  const byId = new Map(liveNodes.map((n) => [n.id, n]));
   const pathNodes = process.happyPath
     .map((id) => byId.get(id))
     .filter((n): n is ProcessNode => Boolean(n));
@@ -49,12 +66,12 @@ export function MapScreen() {
   // interrupting it. Bin determination is the canonical case: it happens WITHIN
   // warehouse-task creation, so listing it as a sequential step would teach a
   // false ordering.
-  const offPath = process.nodes.filter((n) => !process.happyPath.includes(n.id));
+  const offPath = liveNodes.filter((n) => !process.happyPath.includes(n.id));
 
   const selected = nodeId ? byId.get(nodeId) ?? null : null;
 
   function edgeAfter(id: string): ProcessEdge | undefined {
-    return process.edges.find((e) => e.from === id && process.happyPath.includes(e.to));
+    return liveEdges.find((e) => e.from === id && process.happyPath.includes(e.to));
   }
 
   return (
@@ -136,7 +153,7 @@ export function MapScreen() {
                 >
                   <span className="block text-sm font-medium text-slate-800">{node.label}</span>
                   <KindBadge kind={node.kind} />
-                  {process.edges
+                  {liveEdges
                     .filter((e) => e.to === node.id)
                     .slice(0, 1)
                     .map((e) => (
@@ -175,8 +192,20 @@ export function MapScreen() {
         )}
       </div>
 
+      {flaggedIds.size > 0 && (
+        <p className="mx-auto mt-6 w-full max-w-md text-center text-xs text-slate-400">
+          {flaggedIds.size} item{flaggedIds.size === 1 ? '' : 's'} hidden because you marked
+          {flaggedIds.size === 1 ? ' it' : ' them'} wrong.
+        </p>
+      )}
+
       {selected && (
-        <NodeDetail node={selected} onClose={() => navigate(`/pack/${pack.id}/map`)} />
+        <NodeDetail
+          node={selected}
+          packId={pack.id}
+          onFlagChange={() => setFlagTick((t) => t + 1)}
+          onClose={() => navigate(`/pack/${pack.id}/map`)}
+        />
       )}
     </main>
   );
@@ -256,7 +285,17 @@ function TokenChip({ token }: { token: SourcedToken }) {
  * learner who can recite the sequence but cannot answer them has memorised
  * rather than understood.
  */
-function NodeDetail({ node, onClose }: { node: ProcessNode; onClose: () => void }) {
+function NodeDetail({
+  node,
+  packId,
+  onFlagChange,
+  onClose,
+}: {
+  node: ProcessNode;
+  packId: string;
+  onFlagChange: () => void;
+  onClose: () => void;
+}) {
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-6">
       <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-5 pb-[calc(env(safe-area-inset-bottom)+20px)] shadow-xl sm:rounded-2xl">
@@ -296,6 +335,16 @@ function NodeDetail({ node, onClose }: { node: ProcessNode; onClose: () => void 
             )}
           </div>
         )}
+
+        <FlagButton
+          packId={packId}
+          targetId={node.id}
+          targetKind="node"
+          onChange={() => {
+            onFlagChange();
+            onClose();
+          }}
+        />
 
         {node.tcodes.length > 0 && (
           <div className="mt-4">

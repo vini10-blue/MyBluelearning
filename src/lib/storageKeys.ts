@@ -12,4 +12,9 @@ export const STORAGE_KEYS = {
   lastPack: 'mybluelearning:last-pack',
   /** Audio narration on/off, and rate. */
   audioPrefs: 'mybluelearning:audio-prefs',
+  /**
+   * The learner's judgements about generated content being wrong. Deliberately
+   * separate from pack storage: packs get regenerated, verdicts must not.
+   */
+  contentFlags: 'mybluelearning:content-flags',
 } as const;
