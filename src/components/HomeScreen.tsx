@@ -68,7 +68,7 @@ export function HomeScreen() {
                 <div className="mt-4 grid grid-cols-2 gap-2">
                   <ModeLink to={`/pack/${pack.id}/map`} label="Map" primary />
                   <ModeLink to={`/pack/${pack.id}/walkthrough`} label="Walkthrough" />
-                  <ModeLink to={`/pack/${pack.id}/drill/sequence`} label="Drills" />
+                  <ModeLink to={`/pack/${pack.id}/drill/all`} label="Drills" />
                   <ModeLink to={`/pack/${pack.id}/explain`} label="Explain" />
                 </div>
 

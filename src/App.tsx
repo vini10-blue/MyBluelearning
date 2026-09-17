@@ -4,6 +4,7 @@ import { SignInScreen } from './components/SignInScreen';
 import { UpdatePrompt } from './components/UpdatePrompt';
 import { HomeScreen } from './components/HomeScreen';
 import { MapScreen } from './components/MapScreen';
+import { DrillScreen } from './components/DrillScreen';
 import { NotBuiltYet } from './components/NotBuiltYet';
 
 interface AppProps {
@@ -32,10 +33,8 @@ export default function App({ bootError }: AppProps) {
             path="/pack/:packId/walkthrough"
             element={<NotBuiltYet mode="Walkthrough" />}
           />
-          <Route
-            path="/pack/:packId/drill/:kind"
-            element={<NotBuiltYet mode="Drills" />}
-          />
+          <Route path="/pack/:packId/drill" element={<DrillScreen />} />
+          <Route path="/pack/:packId/drill/:kind" element={<DrillScreen />} />
           <Route path="/pack/:packId/explain" element={<NotBuiltYet mode="Explain" />} />
           <Route path="/review" element={<NotBuiltYet mode="Review queue" />} />
           <Route path="/ingest" element={<NotBuiltYet mode="Add a source" />} />
