@@ -17,4 +17,6 @@ export const STORAGE_KEYS = {
    * separate from pack storage: packs get regenerated, verdicts must not.
    */
   contentFlags: 'mybluelearning:content-flags',
+  /** Ingested course packs. Behind the packs.ts seam; OneDrive replaces this. */
+  packs: 'mybluelearning:packs',
 } as const;

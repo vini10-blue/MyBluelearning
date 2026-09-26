@@ -1,4 +1,5 @@
 import { SEED_PACK } from '../content/seedPack';
+import { loadStoredPacks } from './packStore';
 import type { Citation, CoursePack } from './types';
 
 /**
@@ -11,7 +12,8 @@ import type { Citation, CoursePack } from './types';
  */
 
 export function listPacks(): CoursePack[] {
-  return [SEED_PACK];
+  // Ingested packs first: they are real content, the seed is a fixture.
+  return [...loadStoredPacks(), SEED_PACK];
 }
 
 export function getPack(packId: string | undefined): CoursePack | null {
