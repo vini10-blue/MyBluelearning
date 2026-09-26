@@ -412,7 +412,7 @@ function applyResponseHeaders(res: VercelResponse, origin: string | undefined): 
 function scrubText(s: string, maxLen: number): string {
   return s
     // eslint-disable-next-line no-control-regex
-    .replace(/[ -]/g, ' ')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/Bearer\s+[\w.\-]+/gi, '[redacted]')
     .replace(/eyJ[\w.\-]{20,}/g, '[redacted]')
     .slice(0, maxLen);
