@@ -3,9 +3,35 @@ import { createRoot } from 'react-dom/client';
 import { EventType } from '@azure/msal-browser';
 import { MsalProvider } from '@azure/msal-react';
 import { BrowserRouter } from 'react-router-dom';
-import App from './App';
-import { msalInstance } from './auth/msal';
+import { checkAppConfig } from './lib/appConfig';
+import { ConfigMissing } from './components/ConfigMissing';
 import './index.css';
+
+/**
+ * Configuration is checked BEFORE anything MSAL-related is imported.
+ *
+ * `./auth/msal` throws at module load when its env vars are absent, and `App`
+ * (through the ingest client) imports it statically. A static import here
+ * would therefore be hoisted and evaluated before this check could run —
+ * which is exactly how a missing env var used to produce a blank page. Both
+ * are loaded dynamically, only on the configured path.
+ */
+const config = checkAppConfig();
+if (!config.ok) {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <ConfigMissing missing={config.missing} />
+    </StrictMode>,
+  );
+} else {
+  await bootConfigured();
+}
+
+async function bootConfigured() {
+const [{ msalInstance }, { default: App }] = await Promise.all([
+  import('./auth/msal'),
+  import('./App'),
+]);
 
 /**
  * Boot order matters here. After Microsoft redirects back to the app,
@@ -76,3 +102,4 @@ createRoot(document.getElementById('root')!).render(
     </MsalProvider>
   </StrictMode>,
 );
+}
