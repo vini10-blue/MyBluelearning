@@ -386,8 +386,7 @@ interface IngestBody {
 function isAllowedOrigin(origin: string | undefined): boolean {
   if (!origin) return false;
   return (
-    /^https:\/\/mybluelearning-[a-z0-9-]+\.vercel\.app$/.test(origin) ||
-    /^https:\/\/mybluelearning\.vercel\.app$/.test(origin) ||
+    /^https:\/\/my-?bluelearning(-[a-z0-9-]+)?\.vercel\.app$/.test(origin) ||
     origin === 'http://localhost:5173'
   );
 }
@@ -419,8 +418,12 @@ function scrubText(s: string, maxLen: number): string {
     .slice(0, maxLen);
 }
 
-/** Chunks sent to the model per call — bounded so the call fits the time budget. */
-const MAX_CHUNKS_PER_CALL = 8;
+/**
+ * Chunks sent to the model per call — bounded so the call fits the time budget.
+ * Five is a guess sized for a 60s Hobby function with Opus 5 at high effort;
+ * the first real run tells us whether it can go up or must come down.
+ */
+const MAX_CHUNKS_PER_CALL = 5;
 /** ~25MB of base64 — comfortably above any single Help bundle window. */
 const MAX_BASE64_LEN = 34_000_000;
 const MAX_CHUNK_CHARS = 12_000;
@@ -475,12 +478,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   /**
-   * The SDK timeout sits just under the function's own ceiling (300s, set for
-   * this route in vercel.json) so a slow call fails as a typed SDK error we can
-   * report, rather than the platform killing the function mid-flight with no
-   * usable response. These two numbers must move together.
+   * The SDK timeout sits just under the function's own ceiling (60s — the
+   * Vercel Hobby maximum, set in vercel.json) so a slow call fails as a typed
+   * SDK error we can report, rather than the platform killing the function
+   * mid-flight with no usable response. These two numbers must move together;
+   * on a Pro plan both can rise to 300.
    */
-  const client = new Anthropic({ apiKey: anthropicApiKey, timeout: 280_000 });
+  const client = new Anthropic({ apiKey: anthropicApiKey, timeout: 55_000 });
 
   try {
     if (body.pass === 'process') {
