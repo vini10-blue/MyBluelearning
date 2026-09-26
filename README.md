@@ -60,10 +60,13 @@ Anthropic's native citations feature cannot be used here — it returns a 400 wh
 combined with structured outputs — so this is not merely the better option, it
 is the only one.
 
-`npm run check` runs the typecheck plus both harnesses: `check:pack` for the
+`npm run check` runs the typecheck plus four harnesses: `check:pack` for the
 guard, `check:quotes` for verification (including the cases that would defeat
 it — paraphrase, trivially short quotes, real text attributed to the wrong
-document).
+document), `check:pipeline` for real generation-shaped output through settling
+and the guard together, and `check:pdf` for extraction against a fabricated PDF
+— the only way to exercise that path while `help.sap.com` is unreachable from
+the development environment.
 
 Unverified citations render with amber chrome and an explicit label, because a
 citation carrying a real SAP URL and an invented quote is more dangerous than
@@ -87,10 +90,26 @@ Built:
   the client, so without that this endpoint would fetch arbitrary URLs using
   the server's network position).
 
-Not built: Walkthrough, the four drills, Explain, the FSRS review queue, ingest
-pass 2 (item generation), and PDF ingest. The unbuilt routes exist and say
-plainly that they are not implemented rather than showing plausible-looking
-placeholder content.
+- **Ingest, pass 2** — generates Trace, Break-it, Configure-it and Recall
+  items; derives the Sequence item from the happy path rather than asking the
+  model to restate it. Optimises for confidence over coverage, because
+  `correctIndices` is the one field nothing mechanical can check.
+- **PDF ingest** — Help Portal bundles and user uploads, walked a page window
+  at a time. Text is extracted server-side rather than handing the PDF to the
+  model natively: a native document block reads slightly better, but then the
+  server holds no text to verify quotes against and the guard silently dies.
+  Citations from PDFs carry real page numbers and `#page=` deep links — the one
+  place this path beats HTML outright.
+- **The four drills** — Sequence (tap-to-place), Trace and Configure
+  (multi-select), Break-it (branching, consequences not verdicts), interleaved
+  by default. Every item is flaggable.
+- **The flag-wrong control** — removes content the learner marks wrong rather
+  than annotating it; verdicts survive pack regeneration.
+
+Not built: Walkthrough, Explain, the FSRS review queue, and the client
+orchestration layer that sequences ingest passes and uploads to OneDrive. The
+unbuilt routes exist and say plainly that they are not implemented rather than
+showing plausible-looking placeholder content.
 
 **Untestable locally:** `help.sap.com` is blocked by the development
 environment's egress proxy, so the fetch path in `api/_sources.ts` has never
@@ -124,9 +143,11 @@ OneDrive scope.
 
 - `npm run dev` — local Vite
 - `npm run typecheck` — `tsc -b --noEmit`, covers `src`, `api`, `scripts` and the vite config
-- `npm run check` — typecheck plus both verification harnesses
+- `npm run check` — typecheck plus all four harnesses
 - `npm run check:pack` — the accuracy-guard harness
 - `npm run check:quotes` — the citation-verification harness
+- `npm run check:pipeline` — generation output through settling and the guard
+- `npm run check:pdf` — PDF extraction, cleanup, chunking and quote lookup
 - `npm run build` — `tsc -b && vite build`
 - `node scripts/generate-icons.mjs` — regenerate PWA icons from `scripts/icon.svg`
 

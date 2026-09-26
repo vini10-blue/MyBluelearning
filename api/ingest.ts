@@ -6,7 +6,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { AuthError, verifyRequestToken } from './_verifyToken.js';
 import type { VerifiedUser } from './_verifyToken.js';
 import { checkRateLimit } from './_rateLimit.js';
-import { SourceError, fetchSapHelpPage } from './_sources.js';
+import { SourceError, extractUserPdf, fetchSapHelpPage, fetchSapHelpPdf } from './_sources.js';
+import { PdfError } from './_pdf.js';
 import type { SourceChunk, SourceRef } from './_sources.js';
 import { settleCitations, settleTokens } from './_verifyQuotes.js';
 import type { ClaimedCitation, SettledToken } from './_verifyQuotes.js';
@@ -420,6 +421,8 @@ function scrubText(s: string, maxLen: number): string {
 
 /** Chunks sent to the model per call — bounded so the call fits the time budget. */
 const MAX_CHUNKS_PER_CALL = 8;
+/** ~25MB of base64 — comfortably above any single Help bundle window. */
+const MAX_BASE64_LEN = 34_000_000;
 const MAX_CHUNK_CHARS = 12_000;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -485,7 +488,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     return await runItemsPass(client, body, res, requestId);
   } catch (err) {
-    if (err instanceof SourceError) {
+    if (err instanceof SourceError || err instanceof PdfError) {
       return res.status(err.status).json({ error: err.code, detail: err.message, requestId });
     }
     if (err instanceof Anthropic.RateLimitError) {
@@ -521,12 +524,30 @@ async function runProcessPass(
   const sourceId = `src-${randomUUID().slice(0, 8)}`;
 
   let chunks: SourceChunk[];
+  /** Present for PDF sources so the client can walk the next page window. */
+  let pageWindow: { totalPages: number; pageFrom: number; pageTo: number } | undefined;
+
   if (source.kind === 'sap-help-page') {
     chunks = await fetchSapHelpPage(source, sourceId);
-  } else if (source.kind === 'user-pdf' || source.kind === 'sap-help-pdf') {
-    // PDF ingest goes through the model's native document handling rather than
-    // client-side text extraction. Not wired up yet — see README.
-    return res.status(501).json({ error: 'pdf_ingest_not_implemented', requestId });
+  } else if (source.kind === 'sap-help-pdf') {
+    const r = await fetchSapHelpPdf(source, sourceId);
+    chunks = r.chunks;
+    pageWindow = { totalPages: r.totalPages, pageFrom: r.pageFrom, pageTo: r.pageTo };
+  } else if (source.kind === 'user-pdf') {
+    if (typeof source.dataBase64 !== 'string' || source.dataBase64.length === 0) {
+      return res.status(400).json({ error: 'bad_request', requestId });
+    }
+    if (source.dataBase64.length > MAX_BASE64_LEN) {
+      return res.status(413).json({ error: 'payload_too_large', requestId });
+    }
+    // Standard base64: only the base64 alphabet, optional `=` padding, and a
+    // total length that is a multiple of 4.
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(source.dataBase64) || source.dataBase64.length % 4 !== 0) {
+      return res.status(400).json({ error: 'invalid_encoding', requestId });
+    }
+    const r = await extractUserPdf(source, sourceId);
+    chunks = r.chunks;
+    pageWindow = { totalPages: r.totalPages, pageFrom: r.pageFrom, pageTo: r.pageTo };
   } else {
     return res.status(400).json({ error: 'unsupported_source_kind', requestId });
   }
@@ -606,6 +627,7 @@ async function runProcessPass(
       },
     ],
     chunks: used,
+    pageWindow,
     verification: stats,
     usage: {
       input_tokens: response.usage.input_tokens,

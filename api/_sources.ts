@@ -14,6 +14,9 @@
  * verify.
  */
 
+import { extractPdfPages } from './_pdf.js';
+import type { PdfPage } from './_pdf.js';
+
 export type SourceKind = 'sap-help-pdf' | 'sap-help-page' | 'user-pdf';
 
 export interface SourceChunk {
@@ -34,6 +37,13 @@ export interface SourceRef {
   title: string;
   /** base64 payload, for `user-pdf` only. */
   dataBase64?: string;
+  /**
+   * 1-indexed inclusive page window, PDF sources only. SAP's Application Help
+   * bundles run to hundreds or thousands of pages; the client walks a window at
+   * a time rather than asking one function call to swallow a book.
+   */
+  pageFrom?: number;
+  pageTo?: number;
 }
 
 export class SourceError extends Error {
@@ -196,4 +206,84 @@ export function chunkText(
   }
 
   return chunks;
+}
+
+/* ───────────────────────────── PDFs ───────────────────────────── */
+
+/** Pages per chunk. Kept small so a citation names a page a reader can open. */
+const PAGES_PER_CHUNK = 3;
+
+/**
+ * Turn extracted pages into chunks whose locators are real page numbers and
+ * whose URLs carry a `#page=` anchor.
+ *
+ * This is the one place the PDF path beats the HTML path outright. "Part 3" of
+ * a web page is tolerable; "part 173" of a 2,000-page bundle is not a locator
+ * anyone can act on. A page number with a deep link is.
+ */
+export function chunkPages(
+  pages: readonly PdfPage[],
+  opts: { sourceId: string; originUrl?: string },
+): SourceChunk[] {
+  const chunks: SourceChunk[] = [];
+  for (let i = 0; i < pages.length; i += PAGES_PER_CHUNK) {
+    const group = pages.slice(i, i + PAGES_PER_CHUNK);
+    const first = group[0].page;
+    const last = group[group.length - 1].page;
+    chunks.push({
+      sourceId: opts.sourceId,
+      locator: first === last ? `p. ${first}` : `pp. ${first}–${last}`,
+      url: opts.originUrl ? `${opts.originUrl}#page=${first}` : undefined,
+      text: group.map((pg) => pg.text).join('\n\n'),
+    });
+  }
+  return chunks;
+}
+
+export interface PdfSourceResult {
+  chunks: SourceChunk[];
+  totalPages: number;
+  pageFrom: number;
+  pageTo: number;
+}
+
+/** A Help Portal PDF bundle, fetched server-side from the allowlisted host. */
+export async function fetchSapHelpPdf(ref: SourceRef, sourceId: string): Promise<PdfSourceResult> {
+  const url = assertFetchableUrl(ref.origin);
+  const res = await fetchWithLimit(url, 'application/pdf');
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.byteLength > MAX_FETCH_BYTES) {
+    throw new SourceError('source_too_large', 413, 'Source document is too large.');
+  }
+  return pdfToChunks(bytes, ref, sourceId, url.toString());
+}
+
+/** A PDF the user uploaded, arriving as base64 in the request body. */
+export async function extractUserPdf(ref: SourceRef, sourceId: string): Promise<PdfSourceResult> {
+  if (!ref.dataBase64) {
+    throw new SourceError('bad_request', 400, 'No PDF data supplied.');
+  }
+  const bytes = Uint8Array.from(Buffer.from(ref.dataBase64, 'base64'));
+  if (bytes.byteLength > MAX_FETCH_BYTES) {
+    throw new SourceError('source_too_large', 413, 'Uploaded PDF is too large.');
+  }
+  return pdfToChunks(bytes, ref, sourceId, undefined);
+}
+
+async function pdfToChunks(
+  bytes: Uint8Array,
+  ref: SourceRef,
+  sourceId: string,
+  originUrl: string | undefined,
+): Promise<PdfSourceResult> {
+  const { pages, totalPages } = await extractPdfPages(bytes, {
+    pageFrom: ref.pageFrom,
+    pageTo: ref.pageTo,
+  });
+  return {
+    chunks: chunkPages(pages, { sourceId, originUrl }),
+    totalPages,
+    pageFrom: pages[0]?.page ?? ref.pageFrom ?? 1,
+    pageTo: pages[pages.length - 1]?.page ?? ref.pageTo ?? totalPages,
+  };
 }
