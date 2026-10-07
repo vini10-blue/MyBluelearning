@@ -122,6 +122,7 @@ const FRIENDLY_MESSAGES: Record<string, string> = {
   unparseable_response: 'The model returned something unreadable. Try again.',
   upstream_bad_request: 'The ingest service sent a bad request to the model. This is a bug — note the request id.',
   upstream_error: 'The model service had a problem. Please try again.',
+  upstream_timeout: 'The model ran out of time on this source. Try a smaller page window.',
   config_error: 'The ingest service is not fully configured. The API key is missing on the server.',
   internal_error: 'The ingest service had an unexpected problem. Note the request id.',
 };
