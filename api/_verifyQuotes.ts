@@ -203,7 +203,25 @@ export function verifyToken(
       return { foundInSource: true, chunk };
     }
   }
+
+  // Fallback for Customizing paths only: SAP's legacy Help often renders the
+  // arrows between path segments as images with no alt text, so the extracted
+  // page reads "Cross-Process Settings Warehouse Order". Compare with the
+  // separators removed on both sides. The segments must still appear in order
+  // and adjacent, so this is not a loose match.
+  if (needle.includes(' > ')) {
+    const bare = stripSeparators(needle);
+    for (const chunk of candidates) {
+      if (stripSeparators(normalizeToken(chunk.text)).includes(bare)) {
+        return { foundInSource: true, chunk };
+      }
+    }
+  }
   return { foundInSource: false };
+}
+
+function stripSeparators(s: string): string {
+  return s.replace(/ > /g, ' ');
 }
 
 /** Settle a list of claimed tokens, dropping nothing — the guard decides that. */

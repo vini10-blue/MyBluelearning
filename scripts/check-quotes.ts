@@ -178,6 +178,25 @@ check('the model may write the path with ASCII arrows', verifyToken('Cross-Proce
   { sourceId: 's', locator: 'x', text: legacy },
 ]).foundInSource);
 
+const noAlt = htmlToText(
+  '<p>in the IMG for EWM under <i>Cross-Process Settings</i> <img src="arrow.gif"> <i>Warehouse Order</i>.</p>',
+);
+check(
+  'a path whose arrows are alt-less images still matches with separators stripped',
+  verifyToken('Cross-Process Settings → Warehouse Order', [{ sourceId: 's', locator: 'x', text: noAlt }])
+    .foundInSource,
+  JSON.stringify(noAlt),
+);
+check(
+  'the fallback does not accept segments out of order',
+  !verifyToken('Warehouse Order → Cross-Process Settings', [{ sourceId: 's', locator: 'x', text: noAlt }])
+    .foundInSource,
+);
+check(
+  'the fallback does not apply to plain T-codes',
+  !verifyToken('/SCWM/PRDI', [{ sourceId: 's', locator: 'x', text: 'transaction SCWM PRDI' }]).foundInSource,
+);
+
 console.log(
   failures === 0
     ? '\nAll quote-verification checks passed.\n'
