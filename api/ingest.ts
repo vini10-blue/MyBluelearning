@@ -499,7 +499,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (err instanceof Anthropic.BadRequestError) {
       // eslint-disable-next-line no-console
       console.error('[/api/ingest]', requestId, 'bad upstream request', err.message);
-      return res.status(500).json({ error: 'upstream_bad_request', requestId });
+      // The model API's 400 message describes what it rejected about the
+      // request — a schema keyword, a parameter combination — and contains
+      // nothing sensitive. Returning it lets the screen show the cause
+      // directly instead of requiring a trip to the function logs. Three
+      // live runs failed here before this line existed.
+      return res.status(500).json({
+        error: 'upstream_bad_request',
+        detail: `The model rejected the request: ${scrubText(err.message, 600)}`,
+        requestId,
+      });
     }
     if (err instanceof Anthropic.APIError) {
       // eslint-disable-next-line no-console
