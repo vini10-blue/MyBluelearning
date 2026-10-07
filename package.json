@@ -14,9 +14,10 @@
     "typecheck": "tsc -b --noEmit",
     "check:pack": "mkdir -p node_modules/.cache && esbuild scripts/check-pack.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-pack.mjs --log-level=warning && node node_modules/.cache/check-pack.mjs",
     "check:quotes": "mkdir -p node_modules/.cache && esbuild scripts/check-quotes.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-quotes.mjs --log-level=warning && node node_modules/.cache/check-quotes.mjs",
-    "check": "npm run typecheck && npm run check:pack && npm run check:quotes && npm run check:pipeline && npm run check:pdf",
+    "check": "npm run typecheck && npm run check:schema && npm run check:pack && npm run check:quotes && npm run check:pipeline && npm run check:pdf",
     "check:pipeline": "mkdir -p node_modules/.cache && esbuild scripts/check-pipeline.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-pipeline.mjs --log-level=warning && node node_modules/.cache/check-pipeline.mjs",
-    "check:pdf": "mkdir -p node_modules/.cache && esbuild scripts/check-pdf.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-pdf.mjs --log-level=warning --external:unpdf --external:pdf-lib && node node_modules/.cache/check-pdf.mjs"
+    "check:pdf": "mkdir -p node_modules/.cache && esbuild scripts/check-pdf.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-pdf.mjs --log-level=warning --external:unpdf --external:pdf-lib && node node_modules/.cache/check-pdf.mjs",
+    "check:schema": "mkdir -p node_modules/.cache && esbuild scripts/check-schema.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-schema.mjs --log-level=warning --external:unpdf && node node_modules/.cache/check-schema.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

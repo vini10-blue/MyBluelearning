@@ -60,7 +60,7 @@ import type { ClaimedCitation, SettledToken } from './_verifyQuotes.js';
  */
 
 /** Citation shape the model produces. Note what is absent: `quoteFound`. */
-const CITATION_SCHEMA = {
+export const CITATION_SCHEMA = {
   type: 'object',
   properties: {
     sourceId: { type: 'string', description: 'Id of the source document this came from.' },
@@ -77,18 +77,18 @@ const CITATION_SCHEMA = {
 } as const;
 
 /** Something the documentation states. Must quote it. */
-const SOURCED_CLAIM_SCHEMA = {
+export const SOURCED_CLAIM_SCHEMA = {
   type: 'object',
   properties: {
     text: { type: 'string', description: 'The claim, in your own concise wording.' },
-    citations: { type: 'array', items: CITATION_SCHEMA, minItems: 1 },
+    citations: { type: 'array', items: CITATION_SCHEMA },
   },
   required: ['text', 'citations'],
   additionalProperties: false,
 } as const;
 
 /** Your reasoning about the process. Inference is expected here. */
-const SYNTHESIS_SCHEMA = {
+export const SYNTHESIS_SCHEMA = {
   type: 'object',
   properties: {
     text: { type: 'string' },
@@ -109,7 +109,7 @@ const SYNTHESIS_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-const PROCESS_SCHEMA = {
+export const PROCESS_SCHEMA = {
   type: 'object',
   properties: {
     title: { type: 'string' },
@@ -221,14 +221,13 @@ Model the process the source actually describes. If the chunks cover only part o
  * that: ask for fewer items at higher confidence, and make every one of them
  * killable by the learner in one tap.
  */
-const CHOICES_SCHEMA = {
+export const CHOICES_SCHEMA = {
   type: 'object',
   properties: {
-    options: { type: 'array', items: { type: 'string' }, minItems: 3 },
+    options: { type: 'array', items: { type: 'string' } },
     correctIndices: {
       type: 'array',
       items: { type: 'integer' },
-      minItems: 1,
       description:
         'Zero-based indices of EVERY correct option. Use more than one where the material genuinely supports it — SAP exams routinely ask for two or three.',
     },
@@ -261,7 +260,7 @@ const ITEM_BASE_PROPS = {
   },
 } as const;
 
-const ITEMS_SCHEMA = {
+export const ITEMS_SCHEMA = {
   type: 'object',
   properties: {
     trace: {
@@ -291,7 +290,6 @@ const ITEMS_SCHEMA = {
           },
           steps: {
             type: 'array',
-            minItems: 1,
             items: {
               type: 'object',
               properties: {
@@ -952,13 +950,55 @@ async function runItemsPass(
     return citations.map((c) => ({ ...c, quote: scrubText(c.quote, 2_000) }));
   }
 
+  /**
+   * Structural sanity the schema cannot express. Structured outputs reject
+   * array constraints such as minItems — the original schema used them and
+   * the API returned 400 on the first real run — so the guarantees they were
+   * meant to give are checked here instead: a question needs at least two
+   * options, a non-empty answer key, and every key index must point at a real
+   * option. Anything else is dropped and counted.
+   */
+  function validChoices(c: unknown): boolean {
+    if (!c || typeof c !== 'object') return false;
+    const ch = c as { options?: unknown; correctIndices?: unknown };
+    if (!Array.isArray(ch.options) || ch.options.length < 2) return false;
+    if (!Array.isArray(ch.correctIndices) || ch.correctIndices.length === 0) return false;
+    const n = ch.options.length;
+    return ch.correctIndices.every((i) => Number.isInteger(i) && i >= 0 && i < n);
+  }
+
+  function structurallyOk(item: Record<string, unknown>, kind: string): boolean {
+    if (kind === 'trace' || kind === 'configure') return validChoices(item.choices);
+    if (kind === 'break') {
+      const steps = item.steps;
+      return (
+        Array.isArray(steps) &&
+        steps.length > 0 &&
+        steps.every((st) => st && typeof st === 'object' && validChoices((st as Record<string, unknown>).choices))
+      );
+    }
+    if (kind === 'recall') {
+      return typeof item.front === 'string' && item.front.trim() !== '' &&
+        typeof item.back === 'string' && item.back.trim() !== '';
+    }
+    return true;
+  }
+
+  let malformedDropped = 0;
+
   function collect(key: string, kind: string): unknown[] {
     const list = parsed[key];
     if (!Array.isArray(list)) return [];
-    return list.map((raw) => {
+    const out: unknown[] = [];
+    for (const raw of list) {
       const item = raw as Record<string, unknown>;
-      return { ...item, kind, basedOn: settleBasedOn(item.basedOn) };
-    });
+      if (!structurallyOk(item, kind)) {
+        malformedDropped += 1;
+        continue;
+      }
+      out.push({ ...item, kind, basedOn: settleBasedOn(item.basedOn) });
+    }
+    return out;
   }
 
   const items = [
@@ -973,7 +1013,7 @@ async function runItemsPass(
 
   return res.status(200).json({
     items,
-    verification: stats,
+    verification: { ...stats, malformedDropped },
     /**
      * Said out loud in the response because it is the pipeline's real limit:
      * quotes are checked, answer keys are not. The client surfaces this, and it
