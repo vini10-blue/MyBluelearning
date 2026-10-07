@@ -59,6 +59,13 @@ function walk(node: unknown, path: string, seen: Set<unknown>) {
       fail(path, 'object without additionalProperties: false');
     }
     const props = (obj.properties ?? {}) as Record<string, unknown>;
+    // Every property must be listed in `required`. Optional fields are
+    // expressed as required-but-nullable (anyOf with null), the pattern the
+    // expenses app's working schema uses throughout.
+    const required = new Set(Array.isArray(obj.required) ? (obj.required as string[]) : []);
+    for (const k of Object.keys(props)) {
+      if (!required.has(k)) fail(`${path}.${k}`, 'property not listed in required');
+    }
     for (const [k, v] of Object.entries(props)) walk(v, `${path}.${k}`, seen);
   }
   if (obj.type === 'array') walk(obj.items, `${path}[]`, seen);
