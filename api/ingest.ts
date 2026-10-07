@@ -371,13 +371,16 @@ function scrubText(s: string, maxLen: number): string {
  * Work-per-call knobs, read from the environment so they can be tuned from
  * Vercel without a code push.
  *
- * The first real run hit Vercel's 60 s Hobby ceiling with a bare 504: Opus 5
- * at high effort over five chunks does not finish in time. These defaults are
- * sized to fit. Raise INGEST_EFFORT to "high" and INGEST_MAX_CHUNKS to 8 once
- * the function ceiling is lifted (Fluid Compute, or a Pro plan).
+ * Fluid Compute gives a Hobby function 300 s (the plan's maximum; vercel.json
+ * sets maxDuration to that). The first live runs showed Opus 5 cannot produce
+ * a full process model inside the legacy 60 s window at any effort — output
+ * tokens, not thinking, dominate — so the deadline below assumes the 300 s
+ * ceiling. INGEST_MODEL exists so a faster model can be tried from Vercel if
+ * a source still overruns.
  */
 const EFFORT = (process.env.INGEST_EFFORT ?? 'medium') as 'low' | 'medium' | 'high';
-const MAX_CHUNKS_PER_CALL = Math.max(1, Number(process.env.INGEST_MAX_CHUNKS) || 3);
+const MAX_CHUNKS_PER_CALL = Math.max(1, Number(process.env.INGEST_MAX_CHUNKS) || 4);
+const MODEL = process.env.INGEST_MODEL?.trim() || 'claude-opus-5';
 /**
  * Hard deadline for a model call, under the SDK timeout and the function
  * ceiling. The SDK's `timeout` bounds the request, not the streamed body — so
@@ -385,7 +388,7 @@ const MAX_CHUNKS_PER_CALL = Math.max(1, Number(process.env.INGEST_MAX_CHUNKS) ||
  * and the client sees a 504 with no body. Aborting here instead returns a
  * typed error that names its own cause.
  */
-const HARD_DEADLINE_MS = Math.max(10_000, Number(process.env.INGEST_DEADLINE_MS) || 50_000);
+const HARD_DEADLINE_MS = Math.max(10_000, Number(process.env.INGEST_DEADLINE_MS) || 280_000);
 /** ~25MB of base64 — comfortably above any single Help bundle window. */
 const MAX_BASE64_LEN = 34_000_000;
 const MAX_CHUNK_CHARS = 12_000;
@@ -440,13 +443,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   /**
-   * The SDK timeout sits just under the function's own ceiling (60s — the
-   * Vercel Hobby maximum, set in vercel.json) so a slow call fails as a typed
-   * SDK error we can report, rather than the platform killing the function
-   * mid-flight with no usable response. These two numbers must move together;
-   * on a Pro plan both can rise to 300.
+   * The SDK timeout sits just under the function's own ceiling (300 s — the
+   * Vercel Hobby maximum under Fluid Compute, set in vercel.json) so a slow
+   * call fails as a typed SDK error we can report, rather than the platform
+   * killing the function mid-flight with no usable response. The three
+   * numbers — maxDuration, this timeout, HARD_DEADLINE_MS — must move together.
    */
-  const client = new Anthropic({ apiKey: anthropicApiKey, timeout: 55_000 });
+  const client = new Anthropic({ apiKey: anthropicApiKey, timeout: 290_000 });
 
   try {
     if (body.pass === 'process') {
@@ -460,7 +463,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (err instanceof Anthropic.APIUserAbortError) {
       return res.status(504).json({
         error: 'upstream_timeout',
-        detail: `The model did not finish within ${Math.round(HARD_DEADLINE_MS / 1000)} s. Try a smaller page window, or lower INGEST_EFFORT.`,
+        detail: `The model did not finish within ${Math.round(HARD_DEADLINE_MS / 1000)} s. Try a smaller page window, lower INGEST_EFFORT, or set INGEST_MODEL to a faster model.`,
         requestId,
       });
     }
@@ -563,7 +566,7 @@ async function runProcessPass(
     .join('\n\n');
 
   const response = await streamWithDeadline(client, {
-      model: 'claude-opus-5',
+      model: MODEL,
       max_tokens: 16_000,
       thinking: { type: 'adaptive' },
       output_config: {
@@ -886,7 +889,7 @@ async function runItemsPass(
     .join('\n\n');
 
   const response = await streamWithDeadline(client, {
-      model: 'claude-opus-5',
+      model: MODEL,
       max_tokens: 16_000,
       thinking: { type: 'adaptive' },
       output_config: {
