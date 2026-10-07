@@ -10,7 +10,7 @@
  */
 import type { SourceChunk } from '../api/_sources.js';
 import { chunkText, htmlToText } from '../api/_sources.js';
-import { normalizeForMatch, settleCitations, verifyQuote } from '../api/_verifyQuotes.js';
+import { normalizeForMatch, settleCitations, verifyQuote, verifyToken } from '../api/_verifyQuotes.js';
 
 let failures = 0;
 function check(name: string, condition: boolean, detail?: string) {
@@ -159,6 +159,24 @@ check(
   /putaway\s*\n/i.test(text),
   JSON.stringify(text.slice(0, 60)),
 );
+
+console.log('\nConfig paths survive the legacy Help markup');
+const legacy = htmlToText(
+  '<p>In Customizing for EWM under <i>Cross-Process Settings</i>' +
+    '<img src="arrow.gif" alt="&rarr;"> <i>Warehouse Order</i> &#8594; ' +
+    '<i>Define Creation Rule</i>&nbsp;&#x2192;&nbsp;Done &amp;rarr; stays.</p>',
+);
+check(
+  'image alt text and numeric/named arrow entities are decoded',
+  verifyToken('Cross-Process Settings → Warehouse Order → Define Creation Rule → Done', [
+    { sourceId: 's', locator: 'x', text: legacy },
+  ]).foundInSource,
+  JSON.stringify(legacy),
+);
+check('a double-escaped entity is not decoded twice', legacy.includes('&rarr; stays'));
+check('the model may write the path with ASCII arrows', verifyToken('Cross-Process Settings -> Warehouse Order', [
+  { sourceId: 's', locator: 'x', text: legacy },
+]).foundInSource);
 
 console.log(
   failures === 0

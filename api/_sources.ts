@@ -137,25 +137,73 @@ export async function fetchSapHelpPage(ref: SourceRef, sourceId: string): Promis
 }
 
 /**
+ * Named entities worth decoding by hand. Everything numeric is decoded
+ * generically below; this map covers the named forms SAP's legacy Help pages
+ * actually use. `amp` is handled last so `&amp;rarr;` stays literal.
+ */
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: '\u00a0',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  rarr: '\u2192',
+  larr: '\u2190',
+  raquo: '\u00bb',
+  laquo: '\u00ab',
+  mdash: '\u2014',
+  ndash: '\u2013',
+  hellip: '\u2026',
+  ldquo: '\u201c',
+  rdquo: '\u201d',
+  lsquo: '\u2018',
+  rsquo: '\u2019',
+  shy: '\u00ad',
+  times: '\u00d7',
+  middot: '\u00b7',
+  bull: '\u2022',
+};
+
+/** Decode numeric and the listed named HTML entities; unknown names are left as-is. */
+export function decodeEntities(s: string): string {
+  return s
+    .replace(/&#x([0-9a-f]{1,6});/gi, (_, hex: string) => safeFromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d{1,7});/g, (_, dec: string) => safeFromCodePoint(parseInt(dec, 10)))
+    .replace(/&([a-z]+);/gi, (m, name: string) => {
+      const key = name.toLowerCase();
+      return key === 'amp' ? m : (NAMED_ENTITIES[key] ?? m);
+    })
+    .replace(/&amp;/gi, '&');
+}
+
+function safeFromCodePoint(cp: number): string {
+  if (!Number.isFinite(cp) || cp <= 0 || cp > 0x10ffff) return '';
+  // Control characters (other than whitespace) carry nothing we want.
+  if (cp < 0x20 && cp !== 0x09 && cp !== 0x0a && cp !== 0x0d) return ' ';
+  return String.fromCodePoint(cp);
+}
+
+/**
  * Minimal HTML → text. Deliberately not a parser dependency: we need prose for
  * the model and for quote matching, not a faithful DOM.
+ *
+ * Images are replaced by their alt text, surrounded by spaces: SAP's legacy
+ * Help renders the arrows in Customizing paths as inline images, and without
+ * the alt text a path like "Cross-Process Settings → Warehouse Order" loses
+ * its separators and can never be located in the source.
  */
 export function htmlToText(html: string): string {
-  return html
+  const stripped = html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
     .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, ' ')
     // Keep block boundaries so headings don't fuse into the following sentence.
     .replace(/<\/(p|div|li|h[1-6]|tr|section|article)>/gi, '\n')
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/[ \t ]+/g, ' ')
+    .replace(/<img\b[^>]*\balt\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>/gi, (_, d?: string, q?: string) => ` ${d ?? q ?? ''} `)
+    .replace(/<[^>]+>/g, ' ');
+  return decodeEntities(stripped)
+    .replace(/[ \t\u00a0]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
