@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getPack } from '../lib/packs';
+import { useModalChrome } from '../lib/useModalChrome';
 import { flagsForPack, rejectFlagged } from '../lib/contentFlags';
 import { FlagButton } from './FlagButton';
 import type {
@@ -296,12 +297,24 @@ function NodeDetail({
   onFlagChange: () => void;
   onClose: () => void;
 }) {
+  useModalChrome(onClose);
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-6">
-      <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-5 pb-[calc(env(safe-area-inset-bottom)+20px)] shadow-xl sm:rounded-2xl">
-        <div className="flex items-start justify-between gap-3">
+    <div
+      className="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-6"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="node-detail-title"
+        className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* The header stays put while the body scrolls, so the close control is
+            always reachable — a long node pushed it off-screen before. */}
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 p-5 pb-3">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">{node.label}</h2>
+            <h2 id="node-detail-title" className="text-lg font-semibold text-slate-900">{node.label}</h2>
             <KindBadge kind={node.kind} />
           </div>
           <button
@@ -316,7 +329,8 @@ function NodeDetail({
           </button>
         </div>
 
-        <div className="mt-4 space-y-4">
+        <div className="overflow-y-auto p-5 pb-[calc(env(safe-area-inset-bottom)+20px)]">
+        <div className="space-y-4">
           <SourcedBlock label="What it is" claim={node.what} />
           <SynthesisBlock label="Why it exists" synthesis={node.why} />
           <SynthesisBlock label="What breaks without it" synthesis={node.breaksIf} />
@@ -358,6 +372,15 @@ function NodeDetail({
             </div>
           </div>
         )}
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-6 w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white transition active:scale-[0.98]"
+        >
+          Close
+        </button>
+        </div>
       </div>
     </div>
   );
