@@ -9,6 +9,8 @@ import {
 } from '../lib/ingestClient';
 import type { ProcessPassResponse, SourceRefInput } from '../lib/ingestClient';
 import { savePack } from '../lib/packStore';
+import { expectedPassMs, recordPassMs } from '../lib/passTiming';
+import { BusyProgress } from './BusyProgress';
 import type { CoursePack, Item } from '../lib/types';
 import { validateCoursePack } from '../lib/validateCoursePack';
 import type { ValidationReport } from '../lib/validateCoursePack';
@@ -73,8 +75,10 @@ export function IngestScreen() {
     }
 
     setPhase({ kind: 'pass1' });
+    const t0 = Date.now();
     try {
       const pass1 = await runProcessPass(source);
+      recordPassMs('process', Date.now() - t0);
       // Validate the process on its own so the learner sees what the guard
       // makes of it before any items exist.
       const report = validateCoursePack({
@@ -97,10 +101,12 @@ export function IngestScreen() {
 
   async function startPass2(pass1: ProcessPassResponse, report: ValidationReport) {
     setPhase({ kind: 'pass2', pass1, report });
+    const t0 = Date.now();
     try {
       // Generate against the VALIDATED process, not the raw one — items must
       // not reference nodes the guard removed.
       const pass2 = await runItemsPass(report.pack.process, pass1.chunks);
+      recordPassMs('items', Date.now() - t0);
       const full = validateCoursePack({
         ...report.pack,
         items: pass2.items as Item[],
@@ -203,12 +209,14 @@ export function IngestScreen() {
         )}
 
         {(phase.kind === 'pass1' || phase.kind === 'pass2') && (
-          <Busy
+          <BusyProgress
+            key={phase.kind}
             title={phase.kind === 'pass1' ? 'Reading the source…' : 'Writing drills…'}
+            expectedMs={expectedPassMs(phase.kind === 'pass1' ? 'process' : 'items')}
             detail={
               phase.kind === 'pass1'
-                ? 'Fetching, chunking, and building the process model. Up to a few minutes.'
-                : 'Generating items against the approved model and checking every quote.'
+                ? 'Fetching, chunking, and building the process model. The percentage is an estimate from the last run; the model reports no progress of its own.'
+                : 'Generating items against the approved model and checking every quote. Estimate based on the last run.'
             }
           />
         )}
@@ -405,16 +413,6 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg bg-slate-50 p-2 ring-1 ring-slate-200">
       <dt className="text-[10px] uppercase tracking-wide text-slate-400">{label}</dt>
       <dd className="mt-0.5 text-sm font-semibold text-slate-900">{value}</dd>
-    </div>
-  );
-}
-
-function Busy({ title, detail }: { title: string; detail: string }) {
-  return (
-    <div className="mt-5 rounded-2xl bg-white p-6 text-center shadow-sm ring-1 ring-slate-200">
-      <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" aria-hidden="true" />
-      <p className="mt-4 text-sm font-semibold text-slate-900">{title}</p>
-      <p className="mt-1 text-xs text-slate-500">{detail}</p>
     </div>
   );
 }
