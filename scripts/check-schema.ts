@@ -92,7 +92,7 @@ for (const [name, schema] of Object.entries(schemas)) {
   const log = console.log;
   console.log = () => {};
   walk(
-    { type: 'object', additionalProperties: false,
+    { type: 'object', additionalProperties: false, required: ['citations'],
       properties: { citations: { type: 'array', items: { type: 'string' }, minItems: 1 } } },
     'SELF_TEST', new Set(),
   );
