@@ -14,14 +14,7 @@
  * `additionalProperties: false` required on every object. Numeric, string
  * and array constraints are rejected.
  */
-import {
-  CITATION_SCHEMA,
-  CHOICES_SCHEMA,
-  ITEMS_SCHEMA,
-  PROCESS_SCHEMA,
-  SOURCED_CLAIM_SCHEMA,
-  SYNTHESIS_SCHEMA,
-} from '../api/ingest.js';
+import { ITEMS_SCHEMA, PROCESS_SCHEMA } from '../api/ingest.js';
 
 const BANNED = new Set([
   'minItems', 'maxItems', 'uniqueItems', 'contains',
@@ -39,8 +32,18 @@ function fail(path: string, msg: string) {
   console.log(`  ✗ ${path}: ${msg}`);
 }
 
+let currentDefs: Record<string, unknown> = {};
+
 function walk(node: unknown, path: string, seen: Set<unknown>) {
   if (!node || typeof node !== 'object') return;
+  // A reference is a leaf: it must point at an existing $defs entry, and the
+  // target is linted once where it is defined, not at every use.
+  const ref = (node as Record<string, unknown>).$ref;
+  if (typeof ref === 'string') {
+    const m = /^#\/\$defs\/([A-Za-z0-9_]+)$/.exec(ref);
+    if (!m || !(m[1] in currentDefs)) fail(`${path}.$ref`, `unresolvable reference "${ref}"`);
+    return;
+  }
   if (seen.has(node)) {
     fail(path, 'recursive schema reference');
     return;
@@ -76,14 +79,22 @@ function walk(node: unknown, path: string, seen: Set<unknown>) {
   seen.delete(node);
 }
 
-const schemas: Record<string, unknown> = {
-  CITATION_SCHEMA, SOURCED_CLAIM_SCHEMA, SYNTHESIS_SCHEMA, PROCESS_SCHEMA, CHOICES_SCHEMA, ITEMS_SCHEMA,
-};
-for (const [name, schema] of Object.entries(schemas)) {
+// Only the two schemas that are sent as requests. Shared shapes are linted
+// through each root's $defs — a fragment on its own has nothing to resolve
+// its $ref against, so linting it standalone would be a false failure.
+const schemas: Record<string, unknown> = { PROCESS_SCHEMA, ITEMS_SCHEMA };
+function lintRoot(name: string, schema: unknown) {
   const before = failures;
+  const root = schema as Record<string, unknown>;
+  currentDefs = (root.$defs ?? {}) as Record<string, unknown>;
+  for (const [k, v] of Object.entries(currentDefs)) walk(v, `${name}.$defs.${k}`, new Set());
   walk(schema, name, new Set());
-  if (failures === before) console.log(`  ✓ ${name}`);
+  const bytes = JSON.stringify(schema).length;
+  if (failures === before) console.log(`  ✓ ${name} (${bytes} bytes)`);
+  currentDefs = {};
 }
+
+for (const [name, schema] of Object.entries(schemas)) lintRoot(name, schema);
 
 // The lint must be able to fail, or it proves nothing. Feed it the exact
 // shape that broke the first real ingest and require it to object.
@@ -101,6 +112,23 @@ for (const [name, schema] of Object.entries(schemas)) {
   failures = before;
   if (caught === 1) console.log('  ✓ self-test: the lint rejects minItems');
   else fail('SELF_TEST', `expected 1 rejection for minItems, got ${caught}`);
+}
+
+// A dangling $ref must be rejected too — it would compile to nothing.
+{
+  const before = failures;
+  const log = console.log;
+  console.log = () => {};
+  lintRoot('SELF_TEST_REF', {
+    $defs: {},
+    type: 'object', additionalProperties: false, required: ['x'],
+    properties: { x: { $ref: '#/$defs/missing' } },
+  });
+  console.log = log;
+  const caught = failures - before;
+  failures = before;
+  if (caught === 1) console.log('  ✓ self-test: the lint rejects a dangling $ref');
+  else fail('SELF_TEST_REF', `expected 1 rejection for a dangling $ref, got ${caught}`);
 }
 
 console.log(failures === 0 ? '\nAll schema checks passed.\n' : `\n${failures} schema problem(s).\n`);

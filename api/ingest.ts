@@ -59,87 +59,81 @@ import type { ClaimedCitation, SettledToken } from './_verifyQuotes.js';
  *   checked mechanically against the chunk text instead.
  */
 
-/** Citation shape the model produces. Note what is absent: `quoteFound`. */
-export const CITATION_SCHEMA = {
+/**
+ * Structured-output schemas.
+ *
+ * Shared shapes live ONCE under `$defs` and are referenced with `$ref`. The
+ * first live ingest failed with "The compiled grammar is too large": the API
+ * compiles a schema into a grammar, and an earlier version inlined the
+ * citation object at nine positions with a paragraph of description on every
+ * property. Grammar size is the real constraint here; `$ref` lets the
+ * compiler see one citation shape instead of nine.
+ *
+ * Descriptions are deliberately absent. Every instruction they carried is in
+ * the system prompt, which is where the model actually reads guidance.
+ *
+ * Note what the citation shape does NOT contain: `quoteFound`. The model
+ * cannot assert its own trustworthiness; the server decides that.
+ */
+const CITATION_DEF = {
   type: 'object',
   properties: {
-    sourceId: { type: 'string', description: 'Id of the source document this came from.' },
+    sourceId: { type: 'string' },
     sourceTitle: { type: 'string' },
-    locator: { type: 'string', description: 'Where in the source, e.g. a section heading.' },
-    quote: {
-      type: 'string',
-      description:
-        'A VERBATIM span copied character-for-character from the cited chunk, at least one full sentence. Never paraphrase. This is checked automatically against the source text.',
-    },
+    locator: { type: 'string' },
+    quote: { type: 'string' },
   },
   required: ['sourceId', 'sourceTitle', 'locator', 'quote'],
   additionalProperties: false,
 } as const;
 
-/** Something the documentation states. Must quote it. */
-export const SOURCED_CLAIM_SCHEMA = {
+const SOURCED_CLAIM_DEF = {
   type: 'object',
   properties: {
-    text: { type: 'string', description: 'The claim, in your own concise wording.' },
-    citations: { type: 'array', items: CITATION_SCHEMA },
+    text: { type: 'string' },
+    citations: { type: 'array', items: { $ref: '#/$defs/citation' } },
   },
   required: ['text', 'citations'],
   additionalProperties: false,
 } as const;
 
-/** Your reasoning about the process. Inference is expected here. */
-export const SYNTHESIS_SCHEMA = {
+const SYNTHESIS_DEF = {
   type: 'object',
   properties: {
     text: { type: 'string' },
-    origin: {
-      type: 'string',
-      enum: ['stated', 'inferred'],
-      description:
-        'Use "stated" ONLY when the source says this outright and your quote carries the reasoning itself. Otherwise "inferred". Most process reasoning is inferred; saying so is correct, not a weakness.',
-    },
-    basedOn: {
-      type: 'array',
-      items: CITATION_SCHEMA,
-      description:
-        'Passages your reasoning draws on, so a reader can judge it. May be empty for pure inference.',
-    },
+    origin: { type: 'string', enum: ['stated', 'inferred'] },
+    basedOn: { type: 'array', items: { $ref: '#/$defs/citation' } },
   },
   required: ['text', 'origin', 'basedOn'],
   additionalProperties: false,
 } as const;
 
+const NULLABLE_STRING = { anyOf: [{ type: 'string' }, { type: 'null' }] } as const;
+
 export const PROCESS_SCHEMA = {
+  $defs: {
+    citation: CITATION_DEF,
+    sourcedClaim: SOURCED_CLAIM_DEF,
+    synthesis: SYNTHESIS_DEF,
+  },
   type: 'object',
   properties: {
     title: { type: 'string' },
     module: { type: 'string' },
-    summary: {
-      type: 'string',
-      description: 'One paragraph orienting the learner. Say what the process is FOR.',
-    },
+    summary: { type: 'string' },
     nodes: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'kebab-case, stable, e.g. "warehouse-task".' },
+          id: { type: 'string' },
           label: { type: 'string' },
           kind: { type: 'string', enum: ['step', 'document', 'object', 'decision', 'system'] },
-          what: SOURCED_CLAIM_SCHEMA,
-          why: SYNTHESIS_SCHEMA,
-          breaksIf: SYNTHESIS_SCHEMA,
-          tcodes: {
-            type: 'array',
-            items: { type: 'string' },
-            description:
-              'Transaction codes that appear VERBATIM in the chunk text. Never from memory — these are checked literally and dropped if absent.',
-          },
-          configPath: {
-            anyOf: [{ type: 'string' }, { type: 'null' }],
-            description:
-              'Customizing / IMG path, copied verbatim from the chunk text. Null if the chunks do not give one.',
-          },
+          what: { $ref: '#/$defs/sourcedClaim' },
+          why: { $ref: '#/$defs/synthesis' },
+          breaksIf: { $ref: '#/$defs/synthesis' },
+          tcodes: { type: 'array', items: { type: 'string' } },
+          configPath: NULLABLE_STRING,
         },
         required: ['id', 'label', 'kind', 'what', 'why', 'breaksIf', 'tcodes', 'configPath'],
         additionalProperties: false,
@@ -153,8 +147,8 @@ export const PROCESS_SCHEMA = {
           id: { type: 'string' },
           from: { type: 'string' },
           to: { type: 'string' },
-          label: SOURCED_CLAIM_SCHEMA,
-          condition: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          label: { $ref: '#/$defs/sourcedClaim' },
+          condition: NULLABLE_STRING,
         },
         required: ['id', 'from', 'to', 'label', 'condition'],
         additionalProperties: false,
@@ -166,21 +160,16 @@ export const PROCESS_SCHEMA = {
         type: 'object',
         properties: {
           id: { type: 'string' },
-          symptom: SOURCED_CLAIM_SCHEMA,
-          cause: SYNTHESIS_SCHEMA,
+          symptom: { $ref: '#/$defs/sourcedClaim' },
+          cause: { $ref: '#/$defs/synthesis' },
           nodeIds: { type: 'array', items: { type: 'string' } },
-          resolution: SOURCED_CLAIM_SCHEMA,
+          resolution: { $ref: '#/$defs/sourcedClaim' },
         },
         required: ['id', 'symptom', 'cause', 'nodeIds', 'resolution'],
         additionalProperties: false,
       },
     },
-    happyPath: {
-      type: 'array',
-      items: { type: 'string' },
-      description:
-        'Node ids of the canonical path, in order. ONLY genuinely sequential steps. A decision made WITHIN another step is not a later step — leave it off the path and connect it with an edge instead. Every consecutive pair here must have an edge asserting that ordering, or the model is rejected.',
-    },
+    happyPath: { type: 'array', items: { type: 'string' } },
   },
   required: ['title', 'module', 'summary', 'nodes', 'edges', 'failureModes', 'happyPath'],
   additionalProperties: false,
@@ -212,55 +201,29 @@ happyPath holds only genuinely sequential steps. If a decision is made DURING an
 
 Model the process the source actually describes. If the chunks cover only part of one, model that part honestly rather than filling gaps.`;
 
-/**
- * A multiple-response question.
- *
- * `correctIndices` is the highest-stakes field the pipeline produces and the
- * only one no mechanical check can reach. A quote can be located; an answer key
- * cannot be. Everything about how this is prompted and rendered follows from
- * that: ask for fewer items at higher confidence, and make every one of them
- * killable by the learner in one tap.
- */
-export const CHOICES_SCHEMA = {
+const CHOICES_DEF = {
   type: 'object',
   properties: {
     options: { type: 'array', items: { type: 'string' } },
-    correctIndices: {
-      type: 'array',
-      items: { type: 'integer' },
-      description:
-        'Zero-based indices of EVERY correct option. Use more than one where the material genuinely supports it — SAP exams routinely ask for two or three.',
-    },
-    rationales: {
-      type: 'array',
-      items: { type: 'string' },
-      description:
-        'One per option, same order: why it is right or wrong. Shown after answering, including for the options the learner did not pick.',
-    },
-    revealCount: {
-      type: 'boolean',
-      description: 'True to tell the learner how many answers are correct, as SAP does.',
-    },
+    correctIndices: { type: 'array', items: { type: 'integer' } },
+    rationales: { type: 'array', items: { type: 'string' } },
+    revealCount: { type: 'boolean' },
   },
   required: ['options', 'correctIndices', 'rationales', 'revealCount'],
   additionalProperties: false,
 } as const;
 
 const ITEM_BASE_PROPS = {
-  id: { type: 'string', description: 'kebab-case and unique within the pack.' },
-  nodeIds: {
-    type: 'array',
-    items: { type: 'string' },
-    description: 'Ids of the process nodes this item exercises.',
-  },
-  basedOn: {
-    type: 'array',
-    items: CITATION_SCHEMA,
-    description: 'Passages behind the item, so an answer can be checked. Quote verbatim.',
-  },
+  id: { type: 'string' },
+  nodeIds: { type: 'array', items: { type: 'string' } },
+  basedOn: { type: 'array', items: { $ref: '#/$defs/citation' } },
 } as const;
 
 export const ITEMS_SCHEMA = {
+  $defs: {
+    citation: CITATION_DEF,
+    choices: CHOICES_DEF,
+  },
   type: 'object',
   properties: {
     trace: {
@@ -269,9 +232,9 @@ export const ITEMS_SCHEMA = {
         type: 'object',
         properties: {
           ...ITEM_BASE_PROPS,
-          given: { type: 'string', description: 'The starting document or object, and its state.' },
+          given: { type: 'string' },
           question: { type: 'string' },
-          choices: CHOICES_SCHEMA,
+          choices: { $ref: '#/$defs/choices' },
         },
         required: ['id', 'nodeIds', 'basedOn', 'given', 'question', 'choices'],
         additionalProperties: false,
@@ -283,24 +246,15 @@ export const ITEMS_SCHEMA = {
         type: 'object',
         properties: {
           ...ITEM_BASE_PROPS,
-          scenario: {
-            type: 'string',
-            description:
-              'A failure as a practitioner would meet it: what was done, what was expected, what happened instead.',
-          },
+          scenario: { type: 'string' },
           steps: {
             type: 'array',
             items: {
               type: 'object',
               properties: {
                 question: { type: 'string' },
-                choices: CHOICES_SCHEMA,
-                outcomes: {
-                  type: 'array',
-                  items: { type: 'string' },
-                  description:
-                    'One per option: what the learner would OBSERVE after choosing it. Consequences, not verdicts.',
-                },
+                choices: { $ref: '#/$defs/choices' },
+                outcomes: { type: 'array', items: { type: 'string' } },
               },
               required: ['question', 'choices', 'outcomes'],
               additionalProperties: false,
@@ -317,11 +271,8 @@ export const ITEMS_SCHEMA = {
         type: 'object',
         properties: {
           ...ITEM_BASE_PROPS,
-          requirement: {
-            type: 'string',
-            description: 'A business requirement stated as a concrete warehouse situation.',
-          },
-          choices: CHOICES_SCHEMA,
+          requirement: { type: 'string' },
+          choices: { $ref: '#/$defs/choices' },
         },
         required: ['id', 'nodeIds', 'basedOn', 'requirement', 'choices'],
         additionalProperties: false,
